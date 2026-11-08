@@ -711,14 +711,23 @@ void dump(unsigned char *b, int s)
 	if (pipe(hpipe) != 0)
 		return nil;
 	xpc_object_t xpc_out = 0, xpc_in = xpc_dictionary_create(0, 0, 0);
+	if (!xpc_in) {
+		close(hpipe[0]);
+		close(hpipe[1]);
+		return nil;
+	}
 	xpc_dictionary_set_uint64(xpc_in, "handle", 0);
 	xpc_dictionary_set_uint64(xpc_in, "routine", 828);
 	xpc_dictionary_set_uint64(xpc_in, "subsystem", 3);
 	xpc_dictionary_set_uint64(xpc_in, "type", 1);
 	xpc_dictionary_set_fd(xpc_in, "fd", hpipe[1]);
 	xpc_pipe_t xp = xpc_pipe_create_from_port(bootstrap_port, 0);
-//	xpc_pipe_t xp = (xpc_pipe_t)_os_alloc_once_table[1].ptr[3];
-//#if __IPHONE_OS_VERSION_MAX_ALLOWED >= __IPHONE_6_0
+	if (!xp) {
+		xpc_release(xpc_in);
+		close(hpipe[0]);
+		close(hpipe[1]);
+		return nil;
+	}
     if (@available(iOS 6, *)) {
         size_t buf_size;
         if (@available(iOS 12, *)) {
@@ -726,71 +735,69 @@ void dump(unsigned char *b, int s)
         } else {
             buf_size = 0x100000u;
         }
-        // calloc 保证整块缓冲区 NUL 结尾：原来 malloc 未置零，输出没写满时
-        // strstr(buf, ...) 会一路读到未初始化内存之外。
-        char *buf = (char *)calloc(1, buf_size + 1);
-        if (buf) {
-            // 后台持续读 pipe：launchd 输出可能超过管道缓冲，没人读会把 xpc_pipe_routine 卡死
-            dispatch_async(launchd_pipe_queue, ^{
-                off_t done = 0;
-                size_t remains = buf_size;
-                int fd = hpipe[0];
-                while (done < (off_t)buf_size) {
-                    ssize_t once = read(fd, buf + done, remains);
-                    if (once <= 0) break;   // EOF：launchd 写完并关闭了它的 fd
-                    done += once;
-                    remains -= once;
-                }
-            });
-            // 原来只在 error==0 分支等待后台读；error!=0 时主线程不等待就 strstr/free，
-            // 后台 block 可能仍在写 buf（UAF）。改成无条件：先关掉本地写端与 xpc 消息
-            // 持有的 fd dup，让后台 read 能拿到 EOF，再等队列空闲，之后才解析与释放。
-            (void)xpc_pipe_routine(xp, xpc_in, &xpc_out);
-            xpc_release(xpc_in);
-            xpc_in = nil;
-            close(hpipe[1]);
-            hpipe[1] = -1;
-            dispatch_sync(launchd_pipe_queue, ^{});
-		char *endpoints_start = strstr(buf, "\tendpoints = {");
-		if (endpoints_start) {
-			endpoints_start += 14;
-			char *endpoints_end = strchr(endpoints_start, '}');
-			if (endpoints_end)
-				*endpoints_end = 0;
-			PSPortInfo *ports = [PSPortInfo psPortInfoForPid:1];
-			NSScanner *endpoints = [NSScanner scannerWithString:([NSString stringWithUTF8String:endpoints_start] ?: @"")];
-			free(buf);
-            buf = NULL;
-			knownPorts = [NSMutableDictionary dictionaryWithCapacity:1000];
-			while (!endpoints.isAtEnd) {
-				mach_port_name_t port;
-				NSString *name;
-				if (![endpoints scanHexInt:&port]) break;
-				[endpoints scanCharactersFromSet:MU_cset intoString:nil];
-				[endpoints scanCharactersFromSet:AD_cset intoString:nil];
-				if (![endpoints scanUpToCharactersFromSet:[NSCharacterSet newlineCharacterSet] intoString:&name]) break;
-				mach_msg_type_number_t portCount = ports ? ports->count : 0;
-				for (mach_msg_type_number_t i = 0; i < portCount; i++)
-					if (ports->table[i].iin_name == port) {
-						knownPorts[@(ports->table[i].iin_object)] = name;
-						break;
-					}
+		// 缓冲区改由 NSMutableData 承载：dataWithLength 会清零，末尾天然是 NUL，
+		// strstr/strchr 不会读到未初始化内存；ARC 管理生命周期，超时后主线程不再访问，
+		// 后台 block 强引用它直到自己结束，既不会 UAF 也不会重复 free。
+		NSMutableData *pipeBuffer = [NSMutableData dataWithLength:buf_size + 1];
+		dispatch_semaphore_t readDone = dispatch_semaphore_create(0);
+		int rfd = hpipe[0];   // 捕获 fd 值，不再捕获 alloca 的栈指针
+		dispatch_async(launchd_pipe_queue, ^{
+			NSMutableData *buffer = pipeBuffer;   // 强引用，超时也不会被提前释放
+			char *dst = (char *)buffer.mutableBytes;
+			off_t filled = 0;
+			size_t remains = buf_size;
+			while (filled < (off_t)buf_size) {
+				ssize_t n = read(rfd, dst + filled, remains);
+				if (n <= 0) break;   // EOF：launchd 写完并关闭了它的 fd
+				filled += n;
+				remains -= n;
+			}
+			close(rfd);
+			dispatch_semaphore_signal(readDone);
+		});
+		(void)xpc_pipe_routine(xp, xpc_in, &xpc_out);
+		xpc_release(xpc_in);
+		xpc_in = nil;
+		close(hpipe[1]);
+		hpipe[1] = -1;
+		hpipe[0] = -1;   // 读端已交给后台 block 关闭，收尾不要重复 close
+		// 限时等待：launchd 不关 fd / XPC 失败时后台 read 可能永远等不到 EOF，
+		// 原来的 dispatch_sync 会把主线程永久钉死在这里。
+		BOOL timedOut = dispatch_semaphore_wait(readDone,
+			dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC))) != 0;
+		if (!timedOut) {
+			char *buf = (char *)pipeBuffer.mutableBytes;
+			char *endpoints_start = strstr(buf, "\tendpoints = {");
+			if (endpoints_start) {
+				endpoints_start += 14;
+				char *endpoints_end = strchr(endpoints_start, '}');
+				if (endpoints_end)
+					*endpoints_end = 0;
+				PSPortInfo *ports = [PSPortInfo psPortInfoForPid:1];
+				NSScanner *endpoints = [NSScanner scannerWithString:([NSString stringWithUTF8String:endpoints_start] ?: @"")];
+				knownPorts = [NSMutableDictionary dictionaryWithCapacity:1000];
+				while (!endpoints.isAtEnd) {
+					mach_port_name_t port;
+					NSString *name;
+					if (![endpoints scanHexInt:&port]) break;
+					[endpoints scanCharactersFromSet:MU_cset intoString:nil];
+					[endpoints scanCharactersFromSet:AD_cset intoString:nil];
+					if (![endpoints scanUpToCharactersFromSet:[NSCharacterSet newlineCharacterSet] intoString:&name]) break;
+					mach_msg_type_number_t portCount = ports ? ports->count : 0;
+					for (mach_msg_type_number_t i = 0; i < portCount; i++)
+						if (ports->table[i].iin_name == port) {
+							knownPorts[@(ports->table[i].iin_object)] = name;
+							break;
+						}
+				}
 			}
 		}
-            if (buf != NULL)
-                free(buf);
-        }
-    }
+	}
 	if (xpc_in) xpc_release(xpc_in);
 	if (xpc_out) xpc_release(xpc_out);
 	xpc_release(xp);
-    if (hpipe[0] != -1) {
-        close(hpipe[0]);
-    }
-    if (hpipe[1] != -1) {
-        close(hpipe[1]);
-    }
-//#endif
+	if (hpipe[0] != -1) close(hpipe[0]);
+	if (hpipe[1] != -1) close(hpipe[1]);
 	return knownPorts;
 }
 
@@ -835,8 +842,10 @@ const char *port_types[] = {"","(thread)","(task)","(host)","(host priv)","(proc
 				[self.connect appendFormat:@" %X", members[i]];
 			if (members)
 				vm_deallocate(mach_task_self(), (vm_address_t)members, memberCount * sizeof(*members));
-		} else
-		self.color = pset ? _orangeColor()/*[UIColor orangeColor]*/ : send && recv ? _greenColor()/*[UIColor colorWithRed:.0 green:.5 blue:.0 alpha:1.0]*/ : recv ? _blueColor()/*[UIColor blueColor]*/ : /*[UIColor blackColor]*/_labelColor();
+		}
+		// 原来这行挂在 if(pset) 的 else 上，port set 行 color 恒为 nil；
+		// 提到外面无条件赋值，pset 的橙色也才真正生效。
+		self.color = pset ? _orangeColor() : send && recv ? _greenColor() : recv ? _blueColor() : _labelColor();
 	}
 	return self;
 }
@@ -848,10 +857,19 @@ const char *port_types[] = {"","(thread)","(task)","(host)","(host priv)","(proc
 
 + (int)refreshArray:(PSSockArray *)socks
 {
+	// launchd 查询失败（超时/XPC 异常）后不再每帧重试 8MB buffer + 同步 XPC；
+	// 用静态标志负缓存，保持 socks.objects 为 nil，其它模式仍可正常初始化它。
+	static BOOL launchdNamesFailed = NO;
 	PSPortInfo *myports = [PSPortInfo psPortInfoForPid:socks.proc.pid];
 	if (myports->ret != KERN_SUCCESS)
 		return myports->ret;
-	if (!socks.objects) socks.objects = [self getLaunchdPortNames];
+	if (!socks.objects && !launchdNamesFailed) {
+		NSMutableDictionary *names = [self getLaunchdPortNames];
+		if (names)
+			socks.objects = names;
+		else
+			launchdNamesFailed = YES;
+	}
 	NSMutableDictionary *newPorts = [NSMutableDictionary dictionary];
 
 	for (mach_msg_type_number_t i = 0; i < myports->count; i++) {
@@ -1007,7 +1025,11 @@ CFDictionaryRef (*OSKextCopyLoadedKextInfo)(CFArrayRef kextIdentifiers, CFArrayR
 		}
 // If ii is NULL, it means it is being modified, come back later.
 		if (mach_vm_read(task, ii, iiSize, (vm_offset_t *)&ii, &iiSize) == KERN_SUCCESS) {
-			for (int i = 0; i < iiCount; i++) {
+			// mach_vm_read 回写的是实际读到的字节数；实际偏小时仍按旧 iiCount 索引会越界读
+			size_t oneInfo = (socks.proc.flags & P_LP64) ? sizeof(struct dyld_image_info64) : sizeof(struct dyld_image_info);
+			uint32_t readable = oneInfo ? (uint32_t)(iiSize / oneInfo) : 0;
+			if (readable < iiCount) iiCount = readable;
+			for (uint32_t i = 0; i < iiCount; i++) {
 				mach_vm_address_t addr;
 				mach_vm_address_t path;
 				if (socks.proc.flags & P_LP64) {

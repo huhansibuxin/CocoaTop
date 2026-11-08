@@ -4,6 +4,7 @@
 #import "sys/kern_control.h"
 #import "sys/sys_domain.h"
 #define PRIVATE
+#import <stddef.h>
 #import "Compat.h"
 #import "net/ntstat.h"
 //#import <mach/mach_init.h>
@@ -56,10 +57,10 @@ void NetStatCallBack(CFSocketRef s, CFSocketCallBackType callbackType, CFDataRef
 	PSNetArray *self = (__bridge PSNetArray *)info;
 	NSValue *srcval;
 	int fd = CFSocketGetNative(s);
-	nstat_msg_hdr *ns = (nstat_msg_hdr *)CFDataGetBytePtr((CFDataRef)data);
-	int len = CFDataGetLength((CFDataRef)data);
+	nstat_msg_hdr *ns = data ? (nstat_msg_hdr *)CFDataGetBytePtr((CFDataRef)data) : NULL;
+	int len = data ? CFDataGetLength((CFDataRef)data) : 0;
 
-	if (!len || callbackType != kCFSocketDataCallBack) {
+	if (!len || callbackType != kCFSocketDataCallBack || len < (int)sizeof(nstat_msg_hdr)) {
 		// 100% working hack: if an empty packet comes in, we should just reconnect
 		NSLog(@"NSTAT: callbackType=%lu len=%d, reconnecting...", callbackType, len);
 		[self reopen];
@@ -67,10 +68,12 @@ void NetStatCallBack(CFSocketRef s, CFSocketCallBackType callbackType, CFDataRef
 	}
 	switch (ns->type) {
 	case NSTAT_MSG_TYPE_SRC_ADDED: {
+		if (len < (int)sizeof(nstat_msg_src_added)) break;
 		nstat_msg_src_added *nsa = (nstat_msg_src_added *)ns;
 		nstatGetSrcDesc(fd, nsa->provider, nsa->srcref);
 		break; }
 	case NSTAT_MSG_TYPE_SRC_REMOVED: {
+		if (len < (int)sizeof(nstat_msg_src_removed)) break;
 		nstat_msg_src_removed *nsr = (nstat_msg_src_removed *)ns;
 		if ((srcval = self.nstats[@(nsr->srcref)])) {
 			PSCounts cnt = srcval.countsValue;
@@ -79,11 +82,19 @@ void NetStatCallBack(CFSocketRef s, CFSocketCallBackType callbackType, CFDataRef
 		}
 		break; }
 	case NSTAT_MSG_TYPE_SRC_DESC: {
+		// data 是柔性数组，原来只校验 !len 就强转读 pid，截断包会越界读。
+		const size_t dataOffset = offsetof(nstat_msg_src_description, data);
+		if ((size_t)len < dataOffset) break;
 		nstat_msg_src_description *nmsd = (nstat_msg_src_description *)ns;
+		size_t dataLen = (size_t)len - dataOffset;
 		PSCounts cnt = {-1, nmsd->provider, nmsd->srcref};
 		if ((srcval = self.nstats[@(nmsd->srcref)]))
 			cnt = srcval.countsValue;
 		if (nmsd->provider == NSTAT_PROVIDER_UDP) {
+			size_t need = sizeof(nstat_udp_descriptor_ios5);
+			if (@available(iOS 6, *))
+				need = sizeof(nstat_udp_descriptor_ios6_9);
+			if (dataLen < need) break;
 //			if (floor(NSFoundationVersionNumber) >= NSFoundationVersionNumber_iOS_7_0)
 //				cnt.pid = ((nstat_udp_descriptor_ios6_9 *)nmsd->data)->epid;
 //			else if (floor(NSFoundationVersionNumber) >= NSFoundationVersionNumber_iOS_6_0)
@@ -98,6 +109,12 @@ void NetStatCallBack(CFSocketRef s, CFSocketCallBackType callbackType, CFDataRef
                 cnt.pid = ((nstat_udp_descriptor_ios5 *)nmsd->data)->pid;
             }
 		} else if (nmsd->provider == NSTAT_PROVIDER_TCP) {
+			size_t need = sizeof(nstat_tcp_descriptor_ios5);
+			if (@available(iOS 8, *))
+				need = sizeof(nstat_tcp_descriptor_ios8_9);
+			else if (@available(iOS 6, *))
+				need = sizeof(nstat_tcp_descriptor_ios6_7);
+			if (dataLen < need) break;
 //			if (floor(NSFoundationVersionNumber) >= NSFoundationVersionNumber_iOS_8_0)
 //				cnt.pid = ((nstat_tcp_descriptor_ios8_9 *)nmsd->data)->epid;
 //			else if (floor(NSFoundationVersionNumber) >= NSFoundationVersionNumber_iOS_7_0)
@@ -122,6 +139,7 @@ void NetStatCallBack(CFSocketRef s, CFSocketCallBackType callbackType, CFDataRef
 		}
 		break; }
 	case NSTAT_MSG_TYPE_SRC_COUNTS: {
+		if (len < (int)sizeof(nstat_msg_src_counts)) break;
 		nstat_msg_src_counts *cnts = (nstat_msg_src_counts *)ns;
 		if ((srcval = self.nstats[@(cnts->srcref)])) {
 			PSCounts cnt = srcval.countsValue;
@@ -140,6 +158,13 @@ void NetStatCallBack(CFSocketRef s, CFSocketCallBackType callbackType, CFDataRef
 
 - (void)close
 {
+	// runloop source 必须先移除再释放：原来 CFSocketCreateRunLoopSource 的返回值
+	// 既不保存也不释放，每次 reopen（收到空包会触发）都往 runloop 里滞留一个。
+	if (self.netStatSource) {
+		CFRunLoopRemoveSource(CFRunLoopGetCurrent(), self.netStatSource, kCFRunLoopCommonModes);
+		CFRelease(self.netStatSource);
+		self.netStatSource = NULL;
+	}
 	if (self.netStat) {
 		CFSocketInvalidate(self.netStat);
 		CFRelease(self.netStat);
@@ -152,10 +177,15 @@ void NetStatCallBack(CFSocketRef s, CFSocketCallBackType callbackType, CFDataRef
 	[self close];
 	CFSocketContext ctx = {0, (__bridge void *)self};
 	self.netStat = CFSocketCreate(0, PF_SYSTEM, SOCK_DGRAM, SYSPROTO_CONTROL, kCFSocketDataCallBack, NetStatCallBack, &ctx);
-	CFRunLoopAddSource(
-		[[NSRunLoop currentRunLoop] getCFRunLoop],
-		CFSocketCreateRunLoopSource(0, self.netStat, 0/*order*/),
-		kCFRunLoopCommonModes);
+	if (!self.netStat) {
+		NSLog(@"NSTAT CFSocketCreate failed");
+		return;
+	}
+	CFRunLoopSourceRef source = CFSocketCreateRunLoopSource(0, self.netStat, 0/*order*/);
+	if (source) {
+		self.netStatSource = source;   // +1 所有权交给 ivar，close 里统一释放
+		CFRunLoopAddSource([[NSRunLoop currentRunLoop] getCFRunLoop], source, kCFRunLoopCommonModes);
+	}
 	int fd = CFSocketGetNative(self.netStat);
 	if (!self.netStatAddr) {
 		struct ctl_info ctlInfo = {0, NET_STAT_CONTROL_NAME};
@@ -234,6 +264,10 @@ void NetStatCallBack(CFSocketRef s, CFSocketCallBackType callbackType, CFDataRef
 - (void)dealloc
 {
 	[self close];
+	if (self.netStatAddr) {
+		CFRelease(self.netStatAddr);
+		self.netStatAddr = NULL;
+	}
 }
 
 @end

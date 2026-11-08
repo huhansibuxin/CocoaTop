@@ -5,6 +5,7 @@
 @property (assign) unsigned int tcp;
 @property (assign) unsigned int udp;
 @property (assign) CFSocketRef netStat;
+@property (assign) CFRunLoopSourceRef netStatSource;
 @property (assign) CFDataRef netStatAddr;
 + (instancetype)psNetArray;
 - (void)reopen;

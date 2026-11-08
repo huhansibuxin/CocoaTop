@@ -41,15 +41,15 @@ typedef double (^PSColumnFloat)(id proc);
 // Current column width
 @property (assign) NSInteger width;
 // Data displayer (based on PSProc/PSSock data)
-@property (assign) PSColumnData getData;
+@property (copy) PSColumnData getData;
 // Data filtering supplement
-@property (assign) PSColumnFloat getFloatData;
+@property (copy) PSColumnFloat getFloatData;
 // Summary displayer (based on PSProcArray data)
-@property (assign) PSColumnData getSummary;
+@property (copy) PSColumnData getSummary;
 // Color changer
-@property (assign) PSColumnColor getColor;
+@property (copy) PSColumnColor getColor;
 // Sort comparator
-@property (assign) NSComparator sort;
+@property (copy) NSComparator sort;
 // Column styles bitmask
 @property (assign) column_style_t style;
 // Label tag

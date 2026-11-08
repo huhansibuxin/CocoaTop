@@ -282,11 +282,17 @@ UIColor *CTCellBackgroundColor(BOOL terminated, BOOL started, BOOL zebra)
 	self.imageView.image = nil;
 	self.iconShown = NO;
 	self.detailTextLabel.textColor = [UIColor grayColor];
+	// labels 按 columns[1..] 顺序建好，直接按下标取（与主界面一致），
+	// 配置不同步时才回退 viewWithTag: 查一次，不再每列递归遍历视图树。
+	NSUInteger labelIdx = 0;
 	for (PSColumn *col in columns) {
 		UILabel *label;
-		if (col != columns[0])
-			label = (UILabel *)[self viewWithTag:col.tag + 1];
-		else if (col.style & ColumnStyleTooLong) {
+		if (col != columns[0]) {
+			label = labelIdx < self.labels.count ? self.labels[labelIdx] : nil;
+			labelIdx++;
+			if (label.tag != col.tag + 1)
+				label = (UILabel *)[self viewWithTag:col.tag + 1];
+		} else if (col.style & ColumnStyleTooLong) {
 			self.textLabel.text = sock.description;
 			label = self.detailTextLabel;
 		} else {

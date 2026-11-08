@@ -144,8 +144,13 @@ int sort_procs_by_pid(const void *p1, const void *p2)
 	self.procByPid = pidIndex;
 	// Get process list and update the procs array
 	PSProcInfo *procs = [PSProcInfo psProcInfoSort:NO];
-	if (procs->ret)
+	if (procs->ret) {
+		// 此时所有存活进程已被标成 Terminated；直接返回会让本帧全表飘红，
+		// 下一帧把它们全删光重建（数百进程集中读 plist/解图标 = 一次大卡顿）。
+		// 回滚 display 状态，让下一帧正常重来。
+		[self setAllDisplayed:ProcDisplayUser];
 		return procs->ret;
+	}
 	for (int i = 0; i < procs->count; i++) {
 		pid_t thispid = procs->kp[i].kp_proc.p_pid;
 		// Do not include kernel process (pid 0) in the visible list

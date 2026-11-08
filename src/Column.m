@@ -136,15 +136,19 @@ NSString *psProcessUptime(PSProc *proc)
 {
 	// 进程启动时间在其生命周期内不变，缓存到 PSProc 上；
 	// 原来每个可见行每秒都要做一次 proc_pidinfo，属于纯重复的 syscall。
-	if (!proc->start_tvsec_loaded) {
+	// ri_proc_start_abstime 每帧已由 rusage 取到（零 syscall），进程期内恒定：
+	// 用它做身份戳，pid 被新进程复用时会自动失效并重查；查询失败不落缓存，下一帧可自愈。
+	uint64_t stamp = proc->rusage.ri_proc_start_abstime;
+	if (!proc->start_tvsec_loaded || proc->start_tvsec_stamp != stamp) {
 		struct proc_bsdinfo info = {0};
 		int ret = proc_pidinfo(proc.pid, PROC_PIDTBSDINFO, 0, &info, sizeof(info));
-		proc->start_tvsec_valid = (ret == sizeof(info));
-		proc->start_tvsec = proc->start_tvsec_valid ? (time_t)info.pbi_start_tvsec : 0;
+		if (ret != sizeof(info))
+			return @"-1";
+		proc->start_tvsec = (time_t)info.pbi_start_tvsec;
+		proc->start_tvsec_stamp = stamp;
+		proc->start_tvsec_valid = YES;
 		proc->start_tvsec_loaded = YES;
 	}
-	if (!proc->start_tvsec_valid)
-		return @"-1";
 
 	time_t now = time(NULL);
 	if (now < proc->start_tvsec)
@@ -707,7 +711,9 @@ static UIColor *CTDiffColor(int cmp)
 			col.width = 0;
 		else
 			col.width = col.minwidth;
-		width -= col.width;
+		// width 是 NSUInteger，列宽总和超过屏宽时会无符号下溢成天文数字，
+		// 进而让 extendedcol.width 变成 2^64 量级；钳制到 0（主界面已有同类保护）。
+		width = width > (NSUInteger)col.width ? width - col.width : 0;
 		if (col.style & ColumnStyleExtend)
 			extendedcol = col;
 	}

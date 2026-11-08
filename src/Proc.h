@@ -56,6 +56,7 @@ typedef struct PSCounts {
 @public uint64_t rusageSampleTime;
 // 进程启动时间在其生命周期内不变，缓存后 ΣTime 列无需每帧重复 proc_pidinfo
 @public time_t start_tvsec;
+@public uint64_t start_tvsec_stamp;   // 缓存时的进程身份戳 rusage.ri_proc_start_abstime
 @public BOOL start_tvsec_loaded;
 @public BOOL start_tvsec_valid;
 }

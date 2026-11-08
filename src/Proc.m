@@ -86,6 +86,10 @@
 	memcpy(&events_prev, &src->events_prev, sizeof(events_prev));
 	memcpy(&rusage_prev, &src->rusage_prev, sizeof(rusage_prev));
 	memcpy(&netstat_prev, &src->netstat_prev, sizeof(netstat_prev));
+	// WInt/WIdle/WTmr 的 DIFF_DELTA 会读 proc.prev 的 power/power_prev，
+	// 原来漏拷导致这些列的差分颜色永远只会 same/red，从不 blue。
+	memcpy(&power, &src->power, sizeof(power));
+	memcpy(&power_prev, &src->power_prev, sizeof(power_prev));
 }
 
 // Thread states are sorted by priority, top priority becomes a "task state"

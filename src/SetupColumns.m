@@ -187,7 +187,10 @@ enum InOutCols {
 - (void)viewWillAppear:(BOOL)animated
 {
 	[super viewWillAppear:animated];
-	if (animated) {
+	// 原来只判断 animated：以无动画方式首次进入时 cols 尚未初始化，
+	// viewWillDisappear 会把空的 @"Columns" 写进偏好，静默清空用户的列配置。
+	// 改为按「是否已初始化」判断；从 TextViewController 返回（animated=NO）时仍不重置顺序。
+	if (!cols[_in]) {
 		// Don't reset row order if returning from TextViewController
 		cols[_in] = [PSColumn psGetShownColumnsWithWidth:100000000];
 		cols[_out] = [NSMutableArray array];
@@ -201,6 +204,10 @@ enum InOutCols {
 
 - (void)viewWillDisappear:(BOOL)animated
 {
+	[super viewWillDisappear:animated];
+	// 未初始化 / 空列表时绝不写盘，否则会把列配置清成 @[]
+	if (!cols[_in] || ![cols[_in] count])
+		return;
 	NSMutableArray *order = [NSMutableArray array];
 	for (PSColumn* col in cols[_in])
 		[order addObject:[NSNumber numberWithUnsignedInteger:col.tag]];

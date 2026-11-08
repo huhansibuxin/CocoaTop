@@ -139,14 +139,20 @@ UIColor *CTCellBackgroundColor(BOOL terminated, BOOL started, BOOL zebra)
 	// Configuration did not change
 	if (self.id == id)
 		return;
+	// 后台无头拉起时 viewWillAppear 不触发 / keyWindow 为 nil，columns 可能尚未初始化。
+	// 原来 columns.count-1 在空数组(nil)下会无符号下溢成 NSUIntegerMax，
+	// +[NSMutableArray arrayWithCapacity:] 抛异常 -> 未捕获 -> abort()（后台拉起秒闪退的真因）。
+	if (columns.count == 0)
+		return;
+	NSUInteger colCount = columns.count;
 	// Remove old views
 	if (self.labels)
 		for (UILabel *item in self.labels) [item removeFromSuperview];
 	if (self.dividers)
 		for (UIView *item in self.dividers) [item removeFromSuperview];
 	// Create new views
-	self.labels = [NSMutableArray arrayWithCapacity:columns.count-1];
-	self.dividers = [NSMutableArray arrayWithCapacity:columns.count];
+	self.labels = [NSMutableArray arrayWithCapacity:colCount - 1];
+	self.dividers = [NSMutableArray arrayWithCapacity:colCount];
 	self.extendArgsLabel = [[[CocoaTopPreferences sharedPreferences] objectForKey:@"FullWidthCommandLine"] boolValue];
 	self.colorDiffs = [[[CocoaTopPreferences sharedPreferences] objectForKey:@"ColorDiffs"] boolValue];
 	self.textLabel.font = [UIFont systemFontOfSize:(size.height > 40 ? kProcNameFontSize : kTaskNameFontSize)];
@@ -217,8 +223,16 @@ UIColor *CTCellBackgroundColor(BOOL terminated, BOOL started, BOOL zebra)
 - (void)updateWithProc:(PSProc *)proc columns:(NSArray *)columns
 {
 	self.textLabel.text = proc.name;
-	self.textLabel.textColor = proc.uid == 0 ? [UIColor colorWithRed:0.55 green:0.55 blue:1.0 alpha:1.0] :
-		psIsUserApp(proc) ? [UIColor colorWithRed:0.12 green:0.5 blue:0.12 alpha:1.0] : [UIColor blackColor];
+	// 三种进程名颜色只构造一次，避免每个可见 cell 每秒都分配 UIColor
+	static UIColor *rootNameColor, *userNameColor, *plainNameColor;
+	static dispatch_once_t nameColorToken;
+	dispatch_once(&nameColorToken, ^{
+		rootNameColor  = [UIColor colorWithRed:0.55 green:0.55 blue:1.0 alpha:1.0];
+		userNameColor  = [UIColor colorWithRed:0.12 green:0.5 blue:0.12 alpha:1.0];
+		plainNameColor = [UIColor blackColor];
+	});
+	self.textLabel.textColor = proc.uid == 0 ? rootNameColor :
+		psIsUserApp(proc) ? userNameColor : plainNameColor;
 	self.detailTextLabel.text = [proc.executable stringByAppendingString:proc.args];
 	if (proc.icon)
 		self.imageView.image = proc.icon;

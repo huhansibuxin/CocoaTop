@@ -180,6 +180,11 @@
 	configId = 0;
 	selectedPid = -1;
 	fullScreen = NO;
+	// 后台无头拉起不会走 viewWillAppear -> reappearAllView，columns 会一直是 nil，
+	// 但 UIKit 仍会 layout tableView 并问 cellForRowAtIndexPath（崩溃栈正是
+	// CA::Transaction -> UITableView layoutSubviews -> cellForRowAtIndexPath）。
+	// 在 viewDidLoad 就初始化一次；viewWillAppear 时再按实际窗口宽度刷新一次。
+	[self columnConfigChanged];
 }
 
 - (void)searchBar:(UISearchBar *)searchBar textDidChange:(NSString *)filterText
@@ -209,36 +214,32 @@
 	[filter resignFirstResponder];
 }
 
-// 系统 UIBarButtonSystemItemPause / Play 是实心一大坨，且跟随蓝色 tint 特别扎眼。
-// 这里自绘细描边（空心）图标 + 淡灰，AlwaysOriginal 保证不被导航栏染成蓝色。
+// 系统 UIBarButtonSystemItemPause / Play 是实心一大坨。
+// 这里自绘描边图标：外轮廓用系统原版蓝色、中间镂空（不填充），尺寸比上一版放大一档。
+// AlwaysTemplate 交给 UIBarButtonItem 的 tintColor 染色，颜色与系统按钮完全一致。
 static UIImage *CTRefreshToggleImage(BOOL play)
 {
-	const CGFloat k = 22.0;
+	const CGFloat k = 26.0;
 	UIGraphicsBeginImageContextWithOptions(CGSizeMake(k, k), NO, 0);
-	UIColor *stroke;
-	if (@available(iOS 13, *))
-		stroke = UIColor.systemGray2Color;
-	else
-		stroke = [UIColor colorWithWhite:0.68 alpha:1.0];
-	[stroke setStroke];
+	[[UIColor blackColor] setStroke];	// template 只取 alpha，颜色由 tintColor 决定
 
 	UIBezierPath *path = [UIBezierPath bezierPath];
 	if (play) {
-		[path moveToPoint:CGPointMake(7.5, 4.5)];
-		[path addLineToPoint:CGPointMake(17.5, 11)];
-		[path addLineToPoint:CGPointMake(7.5, 17.5)];
+		[path moveToPoint:CGPointMake(9, 4.5)];
+		[path addLineToPoint:CGPointMake(20, 13)];
+		[path addLineToPoint:CGPointMake(9, 21.5)];
 		[path closePath];
 	} else {
-		[path appendPath:[UIBezierPath bezierPathWithRoundedRect:CGRectMake(6.5, 4.5, 3.5, 13) cornerRadius:1.2]];
-		[path appendPath:[UIBezierPath bezierPathWithRoundedRect:CGRectMake(12.5, 4.5, 3.5, 13) cornerRadius:1.2]];
+		[path appendPath:[UIBezierPath bezierPathWithRoundedRect:CGRectMake(7, 4.5, 4.5, 17) cornerRadius:1.5]];
+		[path appendPath:[UIBezierPath bezierPathWithRoundedRect:CGRectMake(14.5, 4.5, 4.5, 17) cornerRadius:1.5]];
 	}
-	path.lineWidth = 1.4;
+	path.lineWidth = 1.8;
 	path.lineJoinStyle = kCGLineJoinRound;
 	[path stroke];
 
 	UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
 	UIGraphicsEndImageContext();
-	return [image imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];
+	return [image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
 }
 
 // 右上按钮：暂停/恢复每秒自动刷新。暂停只在当前页面有效，离开再返回自动恢复。
@@ -250,8 +251,14 @@ static UIImage *CTRefreshToggleImage(BOOL play)
 		pauseIcon = CTRefreshToggleImage(NO);
 		playIcon = CTRefreshToggleImage(YES);
 	}
-	return [[UIBarButtonItem alloc] initWithImage:(refreshPaused ? playIcon : pauseIcon)
+	UIBarButtonItem *item = [[UIBarButtonItem alloc] initWithImage:(refreshPaused ? playIcon : pauseIcon)
 		style:UIBarButtonItemStylePlain target:self action:@selector(toggleRefreshPaused)];
+	// 原版蓝色（自适应深浅色），不用灰色
+	if (@available(iOS 13, *))
+		item.tintColor = UIColor.systemBlueColor;
+	else
+		item.tintColor = [UIColor colorWithRed:0 green:0.478 blue:1 alpha:1];
+	return item;
 }
 
 - (void)toggleRefreshPaused
@@ -303,10 +310,28 @@ static UIImage *CTRefreshToggleImage(BOOL play)
 	// 暂停中 / 手指拖动 / 惯性滚动 / 正在 kill 进程：跳过本次采集与全表 reloadData
 	if (refreshPaused || self.tableView.isTracking || self.tableView.isDecelerating || self.tableView.editing)
 		return;
+	NSUInteger rowsBefore = [self.tableView numberOfRowsInSection:0];
 	[procs refresh];
 	[procs sortUsingComparator:sortColumn.sort desc:sortDescending];
 	[procs filter:filter.text column:filterColumn];
-	[self.tableView reloadData];
+	if (rowsBefore != procs.count) {
+		// 进程增删导致行数变化，必须让 tableView 重建
+		[self.tableView reloadData];
+	} else {
+		// 行数不变：只刷新可见 cell 的文本与底色，避免每秒一次全表 reloadData
+		// （reloadData 会重算全部行高、重问 dataSource、重绘 header/footer）
+		for (UITableViewCell *cell in self.tableView.visibleCells) {
+			NSIndexPath *ip = [self.tableView indexPathForCell:cell];
+			if (!ip || (NSUInteger)ip.row >= procs.count || ![cell isKindOfClass:[GridTableCell class]])
+				continue;
+			PSProc *p = procs[ip.row];
+			[(GridTableCell *)cell updateWithProc:p columns:columns];
+			cell.backgroundColor = CTCellBackgroundColor(
+				p.display == ProcDisplayTerminated,
+				p.display == ProcDisplayStarted,
+				(ip.row & 1) != 0);
+		}
+	}
 	[footer updateSummaryWithColumns:columns procs:procs];
 	// Status bar
 // Also add: Uptime, CPU Freq, Cores, Cache L1/L2
@@ -335,20 +360,17 @@ static UIImage *CTRefreshToggleImage(BOOL play)
         shortLabel = UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPhone;
     }
     
-    if (shortLabel) {
-        statusLabel.frame = CGRectMake(statusLabel.frame.origin.x, statusLabel.frame.origin.y, self.tableView.frame.size.width - 80, 40);
-        statusLabel.text = [NSString stringWithFormat:@"Free: %.1f MB  CPU: %.1f%%",
-        (float)procs.memFree / 1024 / 1024,
-        (float)procs.totalCpu / 10];
-    } else {
-        statusLabel.frame = CGRectMake(statusLabel.frame.origin.x, statusLabel.frame.origin.y, self.tableView.frame.size.width - 150, 40);
-        statusLabel.text = [NSString stringWithFormat:@"Processes: %lu   Threads: %lu   Free: %.1f/%.1f MB   CPU: %.1f%%",
-        (unsigned long)procs.totalCount,
-        (unsigned long)procs.threadCount,
-        (float)procs.memFree / 1024 / 1024,
-        (float)procs.memTotal / 1024 / 1024,
-        (float)procs.totalCpu / 10];
-    }
+    // 宽度没变就不重设 frame（每秒刷新时避免无谓的 layout 触发）
+    CGFloat labelWidth = self.tableView.frame.size.width - (shortLabel ? 80 : 150);
+    if (statusLabel.frame.size.width != labelWidth)
+        statusLabel.frame = CGRectMake(statusLabel.frame.origin.x, statusLabel.frame.origin.y, labelWidth, 40);
+    statusLabel.text = shortLabel
+        ? [NSString stringWithFormat:@"Free: %.1f MB  CPU: %.1f%%",
+            (float)procs.memFree / 1024 / 1024, (float)procs.totalCpu / 10]
+        : [NSString stringWithFormat:@"Processes: %lu   Threads: %lu   Free: %.1f/%.1f MB   CPU: %.1f%%",
+            (unsigned long)procs.totalCount, (unsigned long)procs.threadCount,
+            (float)procs.memFree / 1024 / 1024, (float)procs.memTotal / 1024 / 1024,
+            (float)procs.totalCpu / 10];
 	// Query network statistics, cause no one did it before.
 	if (![_timer isKindOfClass:[NSTimer class]])
 		[procs.nstats query];
@@ -441,12 +463,17 @@ static UIImage *CTRefreshToggleImage(BOOL play)
 {
 	// When configId changes, all cells are reconfigured
 	configId++;
-	columns = [PSColumn psGetShownColumnsWithWidth:UIApplication.sharedApplication.keyWindow.bounds.size.width];
+	// 后台无头启动时 keyWindow 可能为 nil（宽度为 0 -> psGetShownColumnsWithWidth 第一列就 break 返回空数组）。
+	// 用 UIScreen 兜底，保证 columns 至少含第一列，避免空列触发下游越界/无符号下溢。
+	CGFloat windowWidth = UIApplication.sharedApplication.keyWindow.bounds.size.width;
+	if (windowWidth <= 0)
+		windowWidth = UIScreen.mainScreen.bounds.size.width;
+	columns = [PSColumn psGetShownColumnsWithWidth:windowWidth];
 	// Find sort column and create table header
 	filterColumn = [PSColumn psColumnWithTag:[[[CocoaTopPreferences sharedPreferences] objectForKey:@"FilterColumn"] integerValue]];
 	[self searchBarTextDidEndEditing:filter];
 	sortColumn = [PSColumn psColumnWithTag:[[[CocoaTopPreferences sharedPreferences] objectForKey:@"SortColumn"] integerValue]];
-	if (!sortColumn) sortColumn = columns[0];
+	if (!sortColumn) sortColumn = columns.count ? columns[0] : [PSColumn psColumnWithTag:3];
 	sortDescending = [[[CocoaTopPreferences sharedPreferences] objectForKey:@"SortDescending"] boolValue];
 	header = [GridHeaderView headerWithColumns:columns size:CGSizeMake(self.tableView.bounds.size.width, self.tableView.sectionHeaderHeight)];
 	footer = [GridHeaderView footerWithColumns:columns size:CGSizeMake(self.tableView.bounds.size.width, self.tableView.sectionFooterHeight)];

@@ -1,18 +1,6 @@
 #!/bin/bash
-
-jbrootPath=""
-rootfsPath=""
-
-if [ -d "/.jbroot" ]; then
-    jbrootPath="/.jbroot"
-    echo "Using /.jbroot as jbrootPath"
-elif [ -d "/var/jb" ]; then
-    jbrootPath="/var/jb"
-    echo "Using /var/jb as jbrootPath"
-fi
-
-if [ -d "/rootfs" ]; then
-    rootfsPath="/rootfs"
-fi
-
-uicache -u $jbrootPath/Applications/CocoaTop.app
+# 旧脚本在此执行 `uicache -u /.jbroot/Applications/CocoaTop.app`。
+# roothide 下 LSApplicationWorkspace 注册的是 jbroot 真实路径，该路径永远匹配不上，
+# uicache 每次都向 stderr 打印 "Error: Unable to unregister"（安装日志里的红字）。
+# 安装结束后的 uikitools trigger 会自动重建图标缓存，无需预先注销，故整段移除。
+exit 0

@@ -155,7 +155,23 @@ NSURL *open2URL;
         }
     }
 	[socks sortUsingComparator:sortColumn.sort desc:sortDescending];
-	[self.tableView reloadData];
+	if (_timer == nil || [self.tableView numberOfRowsInSection:0] != socks.count) {
+		// 首刷 / 行数变化：让 tableView 重建
+		[self.tableView reloadData];
+	} else {
+		// 行数不变：只刷新可见 cell，避免每秒一次全表 reloadData 打断主线程
+		for (UITableViewCell *cell in self.tableView.visibleCells) {
+			NSIndexPath *ip = [self.tableView indexPathForCell:cell];
+			if (!ip || (NSUInteger)ip.row >= socks.count || ![cell isKindOfClass:[GridTableCell class]])
+				continue;
+			PSSock *s = socks[ip.row];
+			[(GridTableCell *)cell updateWithSock:s columns:columns];
+			cell.backgroundColor = CTCellBackgroundColor(
+				s.display == ProcDisplayTerminated,
+				s.display == ProcDisplayStarted,
+				(ip.row & 1) != 0);
+		}
+	}
 	// First time refresh?
 	if (_timer == nil) {
 		// We don't need info about new sockets, they are all new :)

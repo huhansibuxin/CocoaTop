@@ -28,14 +28,18 @@ jobs:
           export HOMEBREW_NO_REQUIRE_TAP_TRUST=1
           brew install dpkg ldid
 
-      # Makefile 里 TARGET = iphone:clang:14.5:8.0，必须装 14.5 SDK
+      # Makefile 里 TARGET = iphone:clang:14.5:8.0，必须装 14.5 SDK。
+      # 不用 zip 包：14.5 SDK 内含 symlink，unzip 在新版 macOS runner 上会
+      # 报 "symlink error: Permission denied"；改用 sparse-checkout（与 RainbowKeyboard 一致）。
       - name: Install SDK (iPhoneOS14.5)
         run: |
-          cd ${{ runner.temp }}/theos/sdks
-          curl -sLO https://github.com/theos/sdks/archive/refs/heads/master.zip
-          unzip -q master.zip
-          mv sdks-master/iPhoneOS14.5.sdk .
-          rm -rf sdks-master master.zip
+          set -euxo pipefail
+          git clone --depth=1 --filter=blob:none --sparse \
+            https://github.com/theos/sdks.git "${{ runner.temp }}/sdks"
+          cd "${{ runner.temp }}/sdks"
+          git sparse-checkout set iPhoneOS14.5.sdk
+          test -d iPhoneOS14.5.sdk
+          cp -R iPhoneOS14.5.sdk "$THEOS/sdks/"
 
       - name: Build
         run: |

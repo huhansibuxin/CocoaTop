@@ -75,11 +75,43 @@ static const CGFloat kColumnFontSize     = 13.0;
 static const CGFloat kColumnMonoFontSize = 13.0;
 static const CGFloat kHeaderFontSize     = 16.0;
 static const CGFloat kFooterFontSize     = 12.0;
+// 子页面（Summary / Threads / Open files / Open ports）行高只有主界面的 60%，
+// 第一列比主界面小两号；主界面 44pt 行高仍保持 18pt 不变
+static const CGFloat kTaskNameFontSize   = 16.0;
 
 // 列间竖线：短小、极细（1 物理像素）、隔行显示
 static const CGFloat kDividerWidthPx     = 1.0;   // 1 物理像素
 static const CGFloat kDividerHeightRatio = 0.34;  // 仅占行高 34%
 static const NSInteger kVerticalDividerTag = 8701;
+
+// 四种行底色只构造一次，滚动时只做指针赋值，不再逐行分配 UIColor / block
+UIColor *CTCellBackgroundColor(BOOL terminated, BOOL started, BOOL zebra)
+{
+	static UIColor *termColor, *startColor, *zebraColor, *plainColor;
+	static dispatch_once_t onceToken;
+	dispatch_once(&onceToken, ^{
+		if (@available(iOS 13, *)) {
+			termColor = [UIColor colorWithDynamicProvider:^UIColor *(UITraitCollection *c) {
+				return c.userInterfaceStyle == UIUserInterfaceStyleDark
+					? [UIColor colorWithRed:0.5 green:0.12 blue:0.12 alpha:1]
+					: [UIColor colorWithRed:1 green:0.7 blue:0.7 alpha:1];
+			}];
+			startColor = [UIColor colorWithDynamicProvider:^UIColor *(UITraitCollection *c) {
+				return c.userInterfaceStyle == UIUserInterfaceStyleDark
+					? [UIColor colorWithRed:0.12 green:0.5 blue:0.12 alpha:1]
+					: [UIColor colorWithRed:0.7 green:1 blue:0.7 alpha:1];
+			}];
+			zebraColor = UIColor.secondarySystemBackgroundColor;
+			plainColor = UIColor.systemBackgroundColor;
+		} else {
+			termColor = [UIColor colorWithRed:1 green:0.7 blue:0.7 alpha:1];
+			startColor = [UIColor colorWithRed:0.7 green:1 blue:0.7 alpha:1];
+			zebraColor = [UIColor colorWithRed:.95 green:.95 blue:.95 alpha:1];
+			plainColor = [UIColor whiteColor];
+		}
+	});
+	return terminated ? termColor : started ? startColor : zebra ? zebraColor : plainColor;
+}
 
 
 @implementation GridTableCell
@@ -117,7 +149,7 @@ static const NSInteger kVerticalDividerTag = 8701;
 	self.dividers = [NSMutableArray arrayWithCapacity:columns.count];
 	self.extendArgsLabel = [[[CocoaTopPreferences sharedPreferences] objectForKey:@"FullWidthCommandLine"] boolValue];
 	self.colorDiffs = [[[CocoaTopPreferences sharedPreferences] objectForKey:@"ColorDiffs"] boolValue];
-	self.textLabel.font = [UIFont systemFontOfSize:kProcNameFontSize];
+	self.textLabel.font = [UIFont systemFontOfSize:(size.height > 40 ? kProcNameFontSize : kTaskNameFontSize)];
 	if (size.height > 40 && self.extendArgsLabel)
 		size.height /= 2;
 	NSUInteger totalCol;

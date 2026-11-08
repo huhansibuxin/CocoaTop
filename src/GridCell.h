@@ -4,6 +4,9 @@
 #import "Sock.h"
 #import "Column.h"
 
+// 单元格背景色统一缓存一次：原先每行 willDisplayCell 都会新建一个动态颜色闭包对象
+extern UIColor *CTCellBackgroundColor(BOOL terminated, BOOL started, BOOL zebra);
+
 @interface GridTableCell : UITableViewCell
 @property (assign) NSUInteger id;
 @property (assign) NSUInteger firstColWidth;

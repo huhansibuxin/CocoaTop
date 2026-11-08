@@ -620,7 +620,7 @@ NSString *psProcessCpuTime(unsigned int ptime)
 			data:^NSString*(PSSockSummary *sock) { return sock.name; }
 			sort:^NSComparisonResult(PSSock *a, PSSock *b) { return [a.name caseInsensitiveCompare:b.name]; } summary:nil],
 		[PSColumn psColumnWithName:@"Value" fullname:@"Column Value" align:NSTextAlignmentLeft width:140 tag:1001 style:ColumnStyleExtend | ColumnStyleEllipsis
-			data:^NSString*(PSSockSummary *sock) { return sock.col.getData(sock.proc); }
+			data:^NSString*(PSSockSummary *sock) { return sock.value ?: @"-"; }
 			sort:^NSComparisonResult(PSSock *a, PSSock *b) { return 0; } summary:nil],
 		];
 		sockColumns[ColumnModeThreads] = @[

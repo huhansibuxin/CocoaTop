@@ -140,8 +140,14 @@ NSString *psGetProcessName(struct extern_proc *ep)
 {
 	[socks.socks removeAllObjects];
 	for (PSColumn *col in [PSColumn psGetAllColumns]) if (!(col.style & ColumnStyleNoSummary)) {
-		id sock = [PSSockSummary psSockWithProc:socks.proc column:col];
-		if (sock) [socks.socks addObject:sock];
+		PSSockSummary *sock = [PSSockSummary psSockWithProc:socks.proc column:col];
+		if (sock) {
+			// 值统一在这里算一次。refreshWithMode 每个刷新周期都会重建数组，
+			// 所以缓存自动随刷新失效，值仍然是最新的；滚动/复用 cell 时零计算。
+			if (col.getData)
+				sock.value = col.getData(socks.proc) ?: @"-";
+			[socks.socks addObject:sock];
+		}
 	}
 	return 0;
 }

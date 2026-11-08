@@ -138,6 +138,11 @@ NSURL *open2URL;
 			[timer invalidate];
 		timer = [NSTimer scheduledTimerWithTimeInterval:timerInterval target:self selector:@selector(refreshSocks:) userInfo:nil repeats:NO];
 	}
+	// 手指拖动/惯性滚动期间跳过采集与全表 reloadData：定时器链照常续上，
+	// 停手后下一周期自动恢复，滚动时主线程不再被每秒一次的刷新打断。
+	// 首次进入（_timer == nil）必须刷出内容，滚动跳过只对定时刷新生效。
+	if (_timer && (self.tableView.isTracking || self.tableView.isDecelerating))
+		return;
 	// Update titlebar
 	[proc update];
 	self.navigationItem.title = [procName stringByAppendingFormat:@" (CPU %.1f%%)", (float)proc.pcpu / 10];
@@ -300,44 +305,10 @@ NSURL *open2URL;
 - (void)tableView:(UITableView *)tableView willDisplayCell:(UITableViewCell *)cell forRowAtIndexPath:(NSIndexPath *)indexPath
 {
 	display_t display = socks[indexPath.row].display;
-    if (display == ProcDisplayTerminated) {
-        if (@available(iOS 13, *)) {
-            cell.backgroundColor = [UIColor colorWithDynamicProvider:^(UITraitCollection *collection) {
-                if (collection.userInterfaceStyle == UIUserInterfaceStyleDark) {
-                    return [UIColor colorWithRed:0.5 green:0.12 blue:0.12 alpha:1];
-                } else {
-                    return [UIColor colorWithRed:1 green:0.7 blue:0.7 alpha:1];
-                }
-            }];
-        } else {
-            cell.backgroundColor = [UIColor colorWithRed:1 green:0.7 blue:0.7 alpha:1];
-        }
-		
-    } else if (display == ProcDisplayStarted) {
-        if (@available(iOS 13, *)) {
-            cell.backgroundColor = [UIColor colorWithDynamicProvider:^(UITraitCollection *collection) {
-                if (collection.userInterfaceStyle == UIUserInterfaceStyleDark) {
-                    return [UIColor colorWithRed:0.12 green:0.5 blue:0.12 alpha:1];
-                } else {
-                    return [UIColor colorWithRed:0.7 green:1 blue:0.7 alpha:1];
-                }
-            }];
-        } else {
-            cell.backgroundColor = [UIColor colorWithRed:0.7 green:1 blue:0.7 alpha:1];
-        }
-    } else if (indexPath.row & 1) {
-		if (@available(iOS 13, *)) {
-            cell.backgroundColor = UIColor.secondarySystemBackgroundColor;
-        } else {
-            cell.backgroundColor = [UIColor colorWithRed:.95 green:.95 blue:.95 alpha:1];
-        }
-    } else {
-		if (@available(iOS 13, *)) {
-            cell.backgroundColor = UIColor.systemBackgroundColor;
-        } else {
-            cell.backgroundColor = [UIColor whiteColor];
-        }
-    }
+	cell.backgroundColor = CTCellBackgroundColor(
+		display == ProcDisplayTerminated,
+		display == ProcDisplayStarted,
+		(indexPath.row & 1) != 0);
 }
 
 #pragma mark -
@@ -349,10 +320,10 @@ NSURL *open2URL;
 	if (!sock)
 		return;
 	NSString *title = (viewMode == ColumnModeSummary) ? sock.name : ColumnModeName[viewMode],
-	   *message = (viewMode == ColumnModeSummary) ? [NSString stringWithFormat:@"%@\n\n%@", sock.col.getData(sock.proc),
+	   *message = (viewMode == ColumnModeSummary) ? [NSString stringWithFormat:@"%@\n\n%@", sock.value,
 	   [sock.col.descr substringWithRange:NSMakeRange(0, [sock.col.descr lineRangeForRange:NSMakeRange(0,1)].length-1)]] :
 			  (viewMode == ColumnModeModules) ? sock.name : sock.description;
-	messageCopy = [(viewMode == ColumnModeSummary) ? sock.col.getData(sock.proc) : (viewMode == ColumnModeModules) ? sock.name : sock.description stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+	messageCopy = [(viewMode == ColumnModeSummary) ? sock.value : (viewMode == ColumnModeModules) ? sock.name : sock.description stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
 	if (viewMode == ColumnModePorts)
 		message = [[message stringByReplacingOccurrencesOfString:@" <" withString:@"\n<"] stringByReplacingOccurrencesOfString:@" >" withString:@"\n>"];
 	NSString *urlA = [[@"filza://view/" stringByAppendingString:messageCopy] stringByAddingPercentEscapesUsingEncoding:NSUTF8StringEncoding];

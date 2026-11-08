@@ -43,6 +43,7 @@
 	PSColumn *filterColumn;
 	BOOL sortDescending;
 	BOOL fullScreen;
+	BOOL refreshPaused;		// 暂停按钮状态：跨页面返回也保持，不自动恢复刷新
 	CGFloat timerInterval;
 	NSUInteger configId;
 	NSString *configChange;
@@ -114,8 +115,8 @@
 	[self popupMenuWithItems:@[@"Settings", @"Columns", @"Quick Guide", @"About"] selected:-1 aligned:UIControlContentHorizontalAlignmentLeft];
 	self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithImage:[UIImage imageNamed:@"UIButtonBarHamburger"] style:UIBarButtonItemStylePlain
 		target:self action:@selector(popupMenuToggle)];
-	self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemRefresh
-		target:self action:@selector(refreshProcs:)];
+	self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemPause
+		target:self action:@selector(toggleRefreshPaused)];
 	statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, self.tableView.frame.size.width - (isPhone ? 80 : 150), 40)];
 	statusLabel.backgroundColor = [UIColor clearColor];
 	self.navigationItem.leftBarButtonItems = @[self.navigationItem.leftBarButtonItem, [[UIBarButtonItem alloc] initWithCustomView:statusLabel]];
@@ -209,10 +210,49 @@
 	[filter resignFirstResponder];
 }
 
+// 右上按钮：暂停/恢复每秒自动刷新。状态持久，进入进程详情再返回也不会自动变回刷新。
+- (UIBarButtonItem *)refreshToggleItem
+{
+	return [[UIBarButtonItem alloc] initWithBarButtonSystemItem:(refreshPaused ? UIBarButtonSystemItemPlay : UIBarButtonSystemItemPause)
+		target:self action:@selector(toggleRefreshPaused)];
+}
+
+- (void)toggleRefreshPaused
+{
+	refreshPaused = !refreshPaused;
+	self.navigationItem.rightBarButtonItem = [self refreshToggleItem];
+	if (refreshPaused) {
+		if (timer.isValid)
+			[timer invalidate];
+		timer = nil;
+	} else {
+		// 恢复时立刻刷新一帧，并重新接上定时器链
+		[self refreshProcs:nil];
+	}
+}
+
+// 统一的定时器续期：暂停时不排下一次；间隔异常时也不排 0 秒定时器
+- (void)rearmRefreshTimer
+{
+	if (refreshPaused || timerInterval < 0.1)
+		return;
+	if (timer.isValid)
+		[timer invalidate];
+	if (timerInterval >= 0.1 + NTSTAT_PREQUERY_INTERVAL)
+		timer = [NSTimer scheduledTimerWithTimeInterval:(timerInterval - NTSTAT_PREQUERY_INTERVAL)
+			target:self selector:@selector(preRefreshProcs:) userInfo:nil repeats:NO];
+	else
+		timer = [NSTimer scheduledTimerWithTimeInterval:timerInterval
+			target:self selector:@selector(refreshProcs:) userInfo:nil repeats:NO];
+}
+
 - (void)preRefreshProcs:(NSTimer *)_timer
 {
-	// Time to query network statistics
-	[procs.nstats query];
+	if (refreshPaused)
+		return;
+	// Time to query network statistics（拖动/惯性滚动期间跳过，避免额外占用主线程）
+	if (!self.tableView.isTracking && !self.tableView.isDecelerating)
+		[procs.nstats query];
 	// And update the view when statistics arrive
 	if (timer.isValid)
 		[timer invalidate];
@@ -221,14 +261,10 @@
 
 - (void)refreshProcs:(NSTimer *)_timer
 {
-	// Rearm the timer: this way the timer will wait for a full interval after each 'fire'
-	if (timerInterval >= 0.1 + NTSTAT_PREQUERY_INTERVAL) {
-		if (timer.isValid)
-			[timer invalidate];
-		timer = [NSTimer scheduledTimerWithTimeInterval:(timerInterval - NTSTAT_PREQUERY_INTERVAL) target:self selector:@selector(preRefreshProcs:) userInfo:nil repeats:NO];
-	}
-	// Do not refresh while the user is killing a process
-	if (self.tableView.editing)
+	// 先续上定时器链，保证跳过某一帧不会让自动刷新永久停摆
+	[self rearmRefreshTimer];
+	// 暂停中 / 手指拖动 / 惯性滚动 / 正在 kill 进程：跳过本次采集与全表 reloadData
+	if (refreshPaused || self.tableView.isTracking || self.tableView.isDecelerating || self.tableView.editing)
 		return;
 	[procs refresh];
 	[procs sortUsingComparator:sortColumn.sort desc:sortDescending];
@@ -430,6 +466,8 @@
 - (void)viewWillAppear:(BOOL)animated
 {
 	[super viewWillAppear:animated];
+	// 从进程详情页返回时保持暂停状态与按钮图标，绝不自动恢复刷新
+	self.navigationItem.rightBarButtonItem = [self refreshToggleItem];
     if (@available(iOS 7, *)) {
         self.navigationController.navigationBar.barTintColor = nil;
     } else {
@@ -512,45 +550,10 @@
 - (void)tableView:(UITableView *)tableView willDisplayCell:(UITableViewCell *)cell forRowAtIndexPath:(NSIndexPath *)indexPath
 {
 	display_t display = ((PSProc *)procs[indexPath.row]).display;
-    if (display == ProcDisplayTerminated) {
-        if (@available(iOS 13, *)) {
-            cell.backgroundColor = [UIColor colorWithDynamicProvider:^(UITraitCollection *collection) {
-                if (collection.userInterfaceStyle == UIUserInterfaceStyleDark) {
-                    return [UIColor colorWithRed:0.5 green:0.12 blue:0.12 alpha:1];
-                } else {
-                    return [UIColor colorWithRed:1 green:0.7 blue:0.7 alpha:1];
-                }
-            }];
-        } else {
-            cell.backgroundColor = [UIColor colorWithRed:1 green:0.7 blue:0.7 alpha:1];
-        }
-    } else if (display == ProcDisplayStarted) {
-        if (@available(iOS 13, *)) {
-            cell.backgroundColor = [UIColor colorWithDynamicProvider:^(UITraitCollection *collection) {
-                if (collection.userInterfaceStyle == UIUserInterfaceStyleDark) {
-                    return [UIColor colorWithRed:0.12 green:0.5 blue:0.12 alpha:1];
-                } else {
-                    return [UIColor colorWithRed:0.7 green:1 blue:0.7 alpha:1];
-                }
-            }];
-        } else {
-            cell.backgroundColor = [UIColor colorWithRed:0.7 green:1 blue:0.7 alpha:1];
-        }
-    } else if (indexPath.row & 1) {
-		//cell.backgroundColor = [UIColor colorWithRed:.95 green:.95 blue:.95 alpha:1];
-        if (@available(iOS 13, *)) {
-            cell.backgroundColor = UIColor.secondarySystemBackgroundColor;
-        } else {
-            cell.backgroundColor = [UIColor colorWithRed:.95 green:.95 blue:.95 alpha:1];
-        }
-    } else {
-		//cell.backgroundColor = [UIColor whiteColor];
-        if (@available(iOS 13, *)) {
-            cell.backgroundColor = UIColor.systemBackgroundColor;
-        } else {
-            cell.backgroundColor = [UIColor whiteColor];
-        }
-    }
+	cell.backgroundColor = CTCellBackgroundColor(
+		display == ProcDisplayTerminated,
+		display == ProcDisplayStarted,
+		(indexPath.row & 1) != 0);
 }
 
 - (void)tableView:(UITableView *)tableView sendSignal:(int)sig toProcessAtIndexPath:(NSIndexPath *)indexPath
@@ -631,20 +634,8 @@
 
 - (NSString *)tableView:(UITableView *)tableView titleForSwipeAccessoryButtonForRowAtIndexPath:(NSIndexPath *)indexPath
 {
-	PSProc *proc = procs[indexPath.row];
-	NSString *bundleIdentifier = [self bundleIdentifierForProcess:proc];
-	BOOL haveBundleIdentifier = bundleIdentifier.length > 0;
-
-	NSString *executable = proc.executable;
-	BOOL isContainersBundleApplication = [executable containsString:@"/var/containers/Bundle/Application/"];
-	BOOL isAppPlugins = [executable containsString:@"/var/containers/Bundle/Application/"] && [executable containsString:@"/PlugIns/"];
-	BOOL isRootHide = [proc.name isEqualToString:@"RootHide"];
-	if (!haveBundleIdentifier || !isContainersBundleApplication || isAppPlugins || isRootHide) {
-		return @"TERM";
-	}
-
-	BOOL isBlacklisted = [self isBlackListedForProcess:proc];
-	return isBlacklisted ? @"开启注入" : @"禁止注入";
+	// 开启/禁止注入开关写入 RootHideConfig 后根本不生效，已整体移除；左滑只保留 KILL
+	return nil;
 }
 
 - (void)tableView:(UITableView *)tableView commitEditingStyle:(UITableViewCellEditingStyle)editingStyle forRowAtIndexPath:(NSIndexPath *)indexPath
@@ -655,13 +646,7 @@
 
 - (void)tableView:(UITableView *)tableView swipeAccessoryButtonPushedForRowAtIndexPath:(NSIndexPath *)indexPath
 {
-	PSProc *proc = procs[indexPath.row];
-	BOOL wantsBlackList = ![self isBlackListedForProcess:proc];
-	if (![self setBlacklisted:wantsBlackList forProcess:proc]) {
-		NSString *message = [self bundleIdentifierForProcess:proc] ? [NSString stringWithFormat:@"无法写入 %@", ROOT_HIDE_CONFIG_PLIST] : @"该进程不是 app，无法设置注入";
-		[[[UIAlertView alloc] initWithTitle:proc.name message:message delegate:nil cancelButtonTitle:@"OK" otherButtonTitles:nil] show];
-		return;
-	}
+	// 注入开关已移除，保留空实现兼容系统调用
 }
 
 #pragma mark -

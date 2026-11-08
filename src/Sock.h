@@ -59,6 +59,8 @@
 @interface PSSockSummary : PSSock
 @property (strong) PSProc *proc;
 @property (strong) PSColumn *col;
+// 该行显示值在 refreshArray 时算一次；cellForRow 只读缓存，滚动时不再逐行同步取数
+@property (strong) NSString *value;
 @end
 
 @interface PSSockThreads : PSSock

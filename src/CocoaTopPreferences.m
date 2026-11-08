@@ -1,7 +1,7 @@
 #import "CocoaTopPreferences.h"
 #import "roothide.h"
 
-#define COCOATOP_PREFERENCES_PLIST jbroot(@"/var/mobile/Library/Preferences/cn.zqbb.cocoatop64.relaxin.plist")
+#define COCOATOP_PREFERENCES_PLIST jbroot(@"/var/mobile/Library/Preferences/ru.domo.cocoatop64.plist")
 
 static NSDictionary *CocoaTopDefaultPreferences(void)
 {

@@ -227,9 +227,17 @@ UIColor *CTCellBackgroundColor(BOOL terminated, BOOL started, BOOL zebra)
 
 - (void)updateWithProc:(PSProc *)proc columns:(NSArray *)columns
 {
+	// 三种进程名颜色只构造一次（纯静态颜色对象，不碰刷新路径 / 表头 / cell 复用池）
+	static UIColor *rootColor, *userColor, *plainColor;
+	static dispatch_once_t nameColorToken;
+	dispatch_once(&nameColorToken, ^{
+		rootColor = [UIColor colorWithRed:0.55 green:0.55 blue:1.0 alpha:1.0];
+		userColor = [UIColor colorWithRed:0.12 green:0.5 blue:0.12 alpha:1.0];
+		plainColor = [UIColor blackColor];
+	});
 	self.textLabel.text = proc.name;
-	self.textLabel.textColor = proc.uid == 0 ? [UIColor colorWithRed:0.55 green:0.55 blue:1.0 alpha:1.0] :
-		psIsUserApp(proc) ? [UIColor colorWithRed:0.12 green:0.5 blue:0.12 alpha:1.0] : [UIColor blackColor];
+	self.textLabel.textColor = proc.uid == 0 ? rootColor :
+		psIsUserApp(proc) ? userColor : plainColor;
 	self.detailTextLabel.text = [proc.executable stringByAppendingString:proc.args];
 	// 必须无条件赋值：proc.icon 为 nil 时要把复用 cell 上的旧图标清掉，
 	// 否则排序变动后该行会一直残留上一次（或上一个 app）的图标。
@@ -245,13 +253,15 @@ UIColor *CTCellBackgroundColor(BOOL terminated, BOOL started, BOOL zebra)
 		if (self.superview)
 			[self layoutIfNeeded];
 	}
+	// labels 是按 columns[1..] 顺序建好的，直接按下标取，
+	// 不再用 viewWithTag: 每列递归遍历整棵视图树；配置不同步时再兜底查一次。
+	NSUInteger labelIdx = 0;
 	for (PSColumn *col in columns)
 		if (col != columns[0]) {
-			//if (col.tag == 4) {
-			//	SmallGraph *graph = (SmallGraph *)[self viewWithTag:1000];//col.tag];
-			//	if (graph) { graph.dots = [proc.cpuhistory copy]; [graph setNeedsDisplay]; }
-			//} //else {
-			UILabel *label = (UILabel *)[self viewWithTag:col.tag + 1];
+			UILabel *label = labelIdx < self.labels.count ? self.labels[labelIdx] : nil;
+			labelIdx++;
+			if (label.tag != col.tag + 1)
+				label = (UILabel *)[self viewWithTag:col.tag + 1];
 			if (label) {
 				label.text = col.getData(proc);
 				if (self.colorDiffs && (col.style & ColumnStyleColor))

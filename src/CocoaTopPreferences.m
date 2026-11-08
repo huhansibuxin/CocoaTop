@@ -74,11 +74,16 @@ static NSDictionary *CocoaTopDefaultPreferences(void)
 
 - (void)registerDefaults:(NSDictionary *)defaults
 {
+	__block BOOL changed = NO;
 	[defaults enumerateKeysAndObjectsUsingBlock:^(NSString *key, id value, BOOL *stop) {
-		if (!self.values[key])
+		if (!self.values[key]) {
 			self.values[key] = value;
+			changed = YES;
+		}
 	}];
-	[self.values writeToFile:COCOATOP_PREFERENCES_PLIST atomically:YES];
+	// 原来每次启动都无条件全量写盘；配置已齐全时不应产生任何磁盘 I/O
+	if (changed)
+		[self.values writeToFile:COCOATOP_PREFERENCES_PLIST atomically:YES];
 }
 
 - (void)reset

@@ -79,8 +79,11 @@ NSString *psPortRightsString(uint32_t rights)
 		*pst++ = L'R';
 	if (rights & MACH_PORT_TYPE_PORT_SET)
 		*pst++ = L'P';
-	if (rights & MACH_PORT_TYPE_PORT_SET)
+	// 原版这里误写成 PORT_SET（与上一行重复），导致 's' 永远出不来
+#ifdef MACH_PORT_TYPE_SPREQUEST
+	if (rights & MACH_PORT_TYPE_SPREQUEST)
 		*pst++ = L's';
+#endif
 	if (rights & MACH_PORT_TYPE_DEAD_NAME)
 		*pst++ = L'D';
 	return [NSString stringWithCharacters:st length:(pst - st)];
@@ -129,18 +132,25 @@ NSString *psSystemUptime()
 		return @"-";
 }
 
-NSString *psProcessUptime(pid_t pid)
+NSString *psProcessUptime(PSProc *proc)
 {
-	struct proc_bsdinfo info = {0};
-	int ret = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, sizeof(info));
-	if (ret != sizeof(info))
+	// 进程启动时间在其生命周期内不变，缓存到 PSProc 上；
+	// 原来每个可见行每秒都要做一次 proc_pidinfo，属于纯重复的 syscall。
+	if (!proc->start_tvsec_loaded) {
+		struct proc_bsdinfo info = {0};
+		int ret = proc_pidinfo(proc.pid, PROC_PIDTBSDINFO, 0, &info, sizeof(info));
+		proc->start_tvsec_valid = (ret == sizeof(info));
+		proc->start_tvsec = proc->start_tvsec_valid ? (time_t)info.pbi_start_tvsec : 0;
+		proc->start_tvsec_loaded = YES;
+	}
+	if (!proc->start_tvsec_valid)
 		return @"-1";
 
 	time_t now = time(NULL);
-	if (now < (time_t)info.pbi_start_tvsec)
+	if (now < proc->start_tvsec)
 		return @"-1";
 
-	uint64_t uptime = (uint64_t)(now - (time_t)info.pbi_start_tvsec);
+	uint64_t uptime = (uint64_t)(now - proc->start_tvsec);
 	uint64_t days = uptime / 86400;
 	uint64_t hours = (uptime % 86400) / 3600;
 	uint64_t minutes = (uptime % 3600) / 60;
@@ -156,8 +166,6 @@ NSString *psProcessCpuTime(unsigned int ptime)
 				 : [NSString stringWithFormat:@"%u:%02u.%02u", ptime / 6000, (ptime / 100) % 60, ptime % 100];
 }
 
-@implementation PSColumn
-
 #define DELTA(ptr, field1, field2) ((ptr)->field1.field2 - (ptr)->field1 ## _prev.field2)
 #define COMPARE_ORDER(a, b) ((a) == (b) ? NSOrderedSame : (a) > (b) ? NSOrderedDescending : NSOrderedAscending)
 #define COMPARE(field) return COMPARE_ORDER(a.field, b.field);
@@ -165,32 +173,32 @@ NSString *psProcessCpuTime(unsigned int ptime)
 #define COMPARE_DELTA(field1, field2) return COMPARE_ORDER(DELTA(a,field1,field2), DELTA(b,field1,field2));
 //#define DIFF_ORDER(a, b) ((a) == (b) ? [UIColor blackColor] : (a) > (b) ? [UIColor colorWithRed:.85 green:.0 blue:.0 alpha:1.0] : [UIColor blueColor])
 //#define DIFF_ORDER(a, b) ((a) == (b) ? [UIColor blackColor] : (a) > (b) ? [UIColor systemRedColor] : [UIColor systemBlueColor])
-#define DIFF_ORDER(a, b) ({ \
-    UIColor *color; \
-    if ((a) == (b)) { \
-        if (@available(iOS 13, *)) { \
-            color = UIColor.labelColor; \
-        } else { \
-            color = UIColor.blackColor; \
-        } \
-    } else if ((a) > (b)) { \
-        if (@available(iOS 7, *)) { \
-            color = UIColor.systemRedColor; \
-        } else { \
-            color = [UIColor colorWithRed:.85 green:.0 blue:.0 alpha:1.0]; \
-        } \
-    } else { \
-        if (@available(iOS 7, *)) { \
-            color = UIColor.systemBlueColor; \
-        } else { \
-            color = [UIColor blueColor]; \
-        } \
-    } \
-    color; \
-})
+// 差分着色的三种颜色只构造一次。动态色对象在绘制时才解析深浅色，缓存不会冻结外观。
+static UIColor *CTDiffColor(int cmp)
+{
+	static UIColor *sameColor, *upColor, *downColor;
+	static dispatch_once_t onceToken;
+	dispatch_once(&onceToken, ^{
+		if (@available(iOS 13, *))
+			sameColor = UIColor.labelColor;
+		else
+			sameColor = UIColor.blackColor;
+		if (@available(iOS 7, *)) {
+			upColor = UIColor.systemRedColor;
+			downColor = UIColor.systemBlueColor;
+		} else {
+			upColor = [UIColor colorWithRed:.85 green:.0 blue:.0 alpha:1.0];
+			downColor = [UIColor blueColor];
+		}
+	});
+	return cmp == 0 ? sameColor : cmp > 0 ? upColor : downColor;
+}
+#define DIFF_ORDER(a, b) CTDiffColor((a) == (b) ? 0 : (a) > (b) ? 1 : -1)
 #define DIFF(field) return DIFF_ORDER(proc.field, proc.prev.field);
 #define DIFF_VAR(field) return DIFF_ORDER(proc->field, proc.prev->field);
 #define DIFF_DELTA(field1, field2) return DIFF_ORDER(DELTA(proc,field1,field2), DELTA(proc.prev,field1,field2));
+
+@implementation PSColumn
 
 + (NSArray *)psGetAllColumns
 {
@@ -573,7 +581,7 @@ NSString *psProcessCpuTime(unsigned int ptime)
 			color:^UIColor*(PSProc *proc) { DIFF_VAR(rusage.ri_diskio_byteswritten); }
 			descr:@"Bytes written to disk since process launch."],
 		[PSColumn psColumnWithName:@"\u03A3Time" fullname:@"Process Uptime" align:NSTextAlignmentRight width:60 tag:29 style:ColumnStyleColor
-			data:^NSString*(PSProc *proc) { return psProcessUptime(proc.pid); }
+			data:^NSString*(PSProc *proc) { return psProcessUptime(proc); }
 			sort:^NSComparisonResult(PSProc *a, PSProc *b) { COMPARE_VAR(rusage.ri_proc_start_abstime); } summary:nil
 			color:^UIColor*(PSProc *proc) { DIFF_VAR(rusage.ri_proc_start_abstime); }
 			descr:@"Time since process launch, including sleep and suspension."],
@@ -714,20 +722,34 @@ NSString *psProcessCpuTime(unsigned int ptime)
 
 + (PSColumn *)psColumnWithTag:(NSInteger)tag
 {
-	NSArray *columns = [PSColumn psGetAllColumns];
-	NSUInteger idx = [columns indexOfObjectPassingTest:^BOOL(PSColumn *col, NSUInteger idx, BOOL *stop) {
-		return col.tag == tag;
-	}];
-	return idx == NSNotFound ? nil : (PSColumn *)columns[idx];
+	// 只做 tag -> 列的索引，返回的是全局 PSColumn 单例本身，绝不复制：
+	// sortHeader: 用指针比较判断当前排序列，返回副本会让表头点击再次失效。
+	static NSDictionary *map;
+	static dispatch_once_t onceToken;
+	dispatch_once(&onceToken, ^{
+		NSMutableDictionary *m = [NSMutableDictionary dictionaryWithCapacity:64];
+		for (PSColumn *col in [PSColumn psGetAllColumns])
+			m[@(col.tag)] = col;
+		map = [m copy];
+	});
+	return map[@(tag)];
 }
 
 + (PSColumn *)psTaskColumnWithTag:(NSInteger)tag forMode:(column_mode_t)mode
 {
-	NSArray *columns = [PSColumn psGetTaskColumns:mode];
-	NSUInteger idx = [columns indexOfObjectPassingTest:^BOOL(PSColumn *col, NSUInteger idx, BOOL *stop) {
-		return col.tag == tag;
-	}];
-	return idx == NSNotFound ? nil : (PSColumn *)columns[idx];
+	static NSMutableDictionary *maps;
+	static dispatch_once_t onceToken;
+	dispatch_once(&onceToken, ^{ maps = [NSMutableDictionary dictionaryWithCapacity:ColumnModes]; });
+	NSNumber *modeKey = @(mode);
+	NSDictionary *map = maps[modeKey];
+	if (!map) {
+		NSMutableDictionary *m = [NSMutableDictionary dictionaryWithCapacity:16];
+		for (PSColumn *col in [PSColumn psGetTaskColumns:mode])
+			m[@(col.tag)] = col;
+		map = [m copy];
+		maps[modeKey] = map;
+	}
+	return map[@(tag)];
 }
 
 - (instancetype)initWithName:(NSString *)name fullname:(NSString *)fullname align:(NSTextAlignment)align width:(NSInteger)width tag:(NSInteger)tag

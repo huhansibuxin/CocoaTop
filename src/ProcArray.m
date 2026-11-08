@@ -51,7 +51,8 @@ int sort_procs_by_pid(const void *p1, const void *p2)
 		qsort(self->kp, self->count, sizeof(*kp), sort_procs_by_pid);
     if (@available(iOS 11, *)) {
     } else if (@available(iOS 10, *)) {
-        if (self->kp[self->count - 1].kp_proc.p_pid == 1) {
+        // sysctl 可能返回 0 个进程；此时读 kp[count-1] 会越界到 kp[-1]
+        if (self->count > 0 && self->kp[self->count - 1].kp_proc.p_pid == 1) {
             if (alloc_size > (self->count + 1) * sizeof(struct kinfo_proc)) {
                 static int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_PID, 0 };
                 size_t length = sizeof(struct kinfo_proc);
@@ -81,6 +82,7 @@ int sort_procs_by_pid(const void *p1, const void *p2)
 	if (!self) return nil;
 	self.iconSize = size;
 	self.procs = [NSMutableArray arrayWithCapacity:300];
+	self.procByPid = [NSMutableDictionary dictionaryWithCapacity:300];
 	self.nstats = [PSNetArray psNetArray];
 	NSProcessInfo *procinfo = [NSProcessInfo processInfo];
 	self.memTotal = procinfo.physicalMemory;
@@ -135,6 +137,11 @@ int sort_procs_by_pid(const void *p1, const void *p2)
 		return obj.display != ProcDisplayTerminated;
 	}]];
 	[self setAllDisplayed:ProcDisplayTerminated];
+	// 每轮刷新只建一次 pid 索引：本轮 procForPid: 以及 NetArray 的查询都变成 O(1)
+	NSMutableDictionary *pidIndex = [NSMutableDictionary dictionaryWithCapacity:self.procs.count + 32];
+	for (PSProc *p in self.procs)
+		pidIndex[@(p.pid)] = p;
+	self.procByPid = pidIndex;
 	// Get process list and update the procs array
 	PSProcInfo *procs = [PSProcInfo psProcInfoSort:NO];
 	if (procs->ret)
@@ -148,6 +155,7 @@ int sort_procs_by_pid(const void *p1, const void *p2)
 		if (!proc) {
 			proc = [PSProc psProcWithKinfo:&procs->kp[i] iconSize:self.iconSize];
 			[self.procs addObject:proc];
+			self.procByPid[@(thispid)] = proc;
 		} else {
 			[proc updateWithKinfo:&procs->kp[i]];
 			proc.display = ProcDisplayUser;
@@ -223,10 +231,8 @@ int sort_procs_by_pid(const void *p1, const void *p2)
 
 - (PSProc *)procForPid:(pid_t)pid
 {
-	NSUInteger idx = [self.procs indexOfObjectPassingTest:^BOOL(id proc, NSUInteger idx, BOOL *stop) {
-		return ((PSProc *)proc).pid == pid;
-	}];
-	return idx == NSNotFound ? nil : (PSProc *)self.procs[idx];
+	// 索引在 refresh 开头按当前存活进程重建，新建进程也会即时写入
+	return self.procByPid[@(pid)];
 }
 
 - (void)filter:(NSString *)text column:(PSColumn *)col

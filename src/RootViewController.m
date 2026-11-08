@@ -627,62 +627,7 @@ static UIImage *CTRefreshToggleImage(BOOL play)
 	[timer performSelector:@selector(fire) withObject:nil afterDelay:.1f];
 }
 
-- (NSMutableDictionary *)getBlacklistAppConfig
-{
-	NSMutableDictionary *rootHideConfig = [NSMutableDictionary dictionaryWithContentsOfFile:ROOT_HIDE_CONFIG_PLIST];
-	if (!rootHideConfig){
-		NSLog(@"[----] rootHideConfig is nil, create new one");
-		rootHideConfig = [NSMutableDictionary dictionary];
-	}
-		
-	NSMutableDictionary *appconfig = [rootHideConfig[@"appconfig"] mutableCopy];
-	if (!appconfig) {
-		NSLog(@"[----] appconfig is nil, create new one");
-		appconfig = [NSMutableDictionary dictionary];
-	}
-	return appconfig;
-}
-
-- (NSString *)bundleIdentifierForProcess:(PSProc *)proc
-{
-	if (![proc.app isKindOfClass:[NSDictionary class]])
-		return nil;
-	NSString *bundleIdentifier = proc.app[@"CFBundleIdentifier"];
-	return [bundleIdentifier isKindOfClass:[NSString class]] && bundleIdentifier.length ? bundleIdentifier : nil;
-}
-
-- (BOOL)isBlackListedForProcess:(PSProc *)proc
-{
-	NSString *bundleIdentifier = [self bundleIdentifierForProcess:proc];
-	if (!bundleIdentifier.length)
-		return NO;
-		
-	NSMutableDictionary *appconfig = [self getBlacklistAppConfig];
-	return [appconfig[bundleIdentifier] boolValue];
-}
-
-- (BOOL)setBlacklisted:(BOOL)blacklisted forProcess:(PSProc *)proc
-{
-	NSString *bundleIdentifier = [self bundleIdentifierForProcess:proc];
-	if (!bundleIdentifier.length) {
-		NSLog(@"[----] bundleIdentifier is nil for proc: %@", proc.name);
-		return NO;
-	}
-	NSMutableDictionary *rootHideConfig = [NSMutableDictionary dictionaryWithContentsOfFile:ROOT_HIDE_CONFIG_PLIST];
-	if (!rootHideConfig){
-		NSLog(@"[----] rootHideConfig is nil, create new one");
-		rootHideConfig = [NSMutableDictionary dictionary];
-	}
-		
-	NSMutableDictionary *appconfig = [rootHideConfig[@"appconfig"] mutableCopy];
-	if (!appconfig) {
-		NSLog(@"[----] appconfig is nil, create new one");
-		appconfig = [NSMutableDictionary dictionary];
-	}
-	appconfig[bundleIdentifier] = @(blacklisted);
-	rootHideConfig[@"appconfig"] = appconfig;
-	return [rootHideConfig writeToFile:ROOT_HIDE_CONFIG_PLIST atomically:YES];
-}
+// 开启/禁止注入开关已废弃：以下 RootHideConfig 读写方法全仓无调用者，已整块删除。
 
 - (NSString *)tableView:(UITableView *)tableView titleForDeleteConfirmationButtonForRowAtIndexPath:(NSIndexPath *)indexPath
 {

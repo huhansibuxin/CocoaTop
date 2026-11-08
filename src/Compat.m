@@ -62,6 +62,10 @@ uint64_t mach_time_to_milliseconds(uint64_t mach_time)
 // Replace some symlinks to shorten path
 + (NSString *)simplifyPathName:(NSString *)path
 {
+	// ShortenPaths 关闭时直接返回原路径：原来无论开关都会先做一次 stringByStandardizingPath，
+	// 并在首次调用时做 10 次符号链接磁盘探测（lstat/readlink）。
+	if (![path hasPrefix:@"/"] || ![[[CocoaTopPreferences sharedPreferences] objectForKey:@"ShortenPaths"] boolValue])
+		return path;
 	static NSArray *source = nil, *target = nil;
 	static dispatch_once_t onceToken;
 	dispatch_once(&onceToken, ^{
@@ -73,8 +77,6 @@ uint64_t mach_time_to_milliseconds(uint64_t mach_time)
 		target = [results copy];
 	});
 	path = [path stringByStandardizingPath];
-	if (![path hasPrefix:@"/"] || ![[[CocoaTopPreferences sharedPreferences] objectForKey:@"ShortenPaths"] boolValue])
-		return path;
 	// Replace link targets with symlinks
 	for (int i = 0; i < target.count; i++) {
 		NSString *key = target[i], *val = source[i];

@@ -10,6 +10,20 @@ NSString *messageCopy=@"";
 NSString *titleA=@"";
 NSURL *open2URL;
 
+// 取列说明的第一行。descr 为空时原来 length-1 会无符号下溢成 NSUIntegerMax，
+// substringWithRange: 随即越界抛异常（与之前后台秒闪退同一类问题）。
+static NSString *CTFirstLineOfDescription(NSString *descr)
+{
+	if (!descr.length)
+		return @"";
+	NSRange range = [descr lineRangeForRange:NSMakeRange(0, 1)];
+	if (range.location == NSNotFound || range.length == 0 || range.location >= descr.length)
+		return @"";
+	range.length = MIN(range.length, descr.length - range.location);
+	return [[descr substringWithRange:range]
+		stringByTrimmingCharactersInSet:[NSCharacterSet newlineCharacterSet]];
+}
+
 @implementation SockViewController
 {
 	PSProc *proc;
@@ -322,8 +336,8 @@ NSURL *open2URL;
 	if (!sock)
 		return;
 	NSString *title = (viewMode == ColumnModeSummary) ? sock.name : ColumnModeName[viewMode],
-	   *message = (viewMode == ColumnModeSummary) ? [NSString stringWithFormat:@"%@\n\n%@", sock.value,
-	   [sock.col.descr substringWithRange:NSMakeRange(0, [sock.col.descr lineRangeForRange:NSMakeRange(0,1)].length-1)]] :
+	   *message = (viewMode == ColumnModeSummary) ? [NSString stringWithFormat:@"%@\n\n%@", sock.value ?: @"",
+	   CTFirstLineOfDescription(sock.col.descr)] :
 			  (viewMode == ColumnModeModules) ? sock.name : sock.description;
 	messageCopy = [(viewMode == ColumnModeSummary) ? sock.value : (viewMode == ColumnModeModules) ? sock.name : sock.description stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
 	if (viewMode == ColumnModePorts)

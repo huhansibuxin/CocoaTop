@@ -67,25 +67,25 @@
 	return [[PSProc alloc] initWithKinfo:ki iconSize:size];
 }
 
-- (instancetype)psProcCopy
+// 复用同一个 prev 对象承载上一帧快照，避免每秒新建与进程数相当的临时 PSProc。
+// 只拷贝数值字段；Column.m 的 DIFF 系列宏读取的正是这些字段。
+- (void)copySnapshotFrom:(PSProc *)src
 {
-	PSProc *proc = [PSProc new];
-	proc.prio = self.prio;
-	proc.nice = self.nice;
-	proc.ptime = self.ptime;
-	proc.pcpu = self.pcpu;
-	proc.threads = self.threads;
-	proc.ports = self.ports;
-	proc.files = self.files;
-	proc.socks = self.socks;
-	memcpy(&proc->basic, &basic, sizeof(basic));
-	memcpy(&proc->events, &events, sizeof(events));
-	memcpy(&proc->rusage, &rusage, sizeof(rusage));
-	memcpy(&proc->netstat, &netstat, sizeof(netstat));
-	memcpy(&proc->events_prev, &events_prev, sizeof(events_prev));
-	memcpy(&proc->rusage_prev, &rusage_prev, sizeof(rusage_prev));
-	memcpy(&proc->netstat_prev, &netstat_prev, sizeof(netstat_prev));
-	return proc;
+	self.prio = src.prio;
+	self.nice = src.nice;
+	self.ptime = src.ptime;
+	self.pcpu = src.pcpu;
+	self.threads = src.threads;
+	self.ports = src.ports;
+	self.files = src.files;
+	self.socks = src.socks;
+	memcpy(&basic, &src->basic, sizeof(basic));
+	memcpy(&events, &src->events, sizeof(events));
+	memcpy(&rusage, &src->rusage, sizeof(rusage));
+	memcpy(&netstat, &src->netstat, sizeof(netstat));
+	memcpy(&events_prev, &src->events_prev, sizeof(events_prev));
+	memcpy(&rusage_prev, &src->rusage_prev, sizeof(rusage_prev));
+	memcpy(&netstat_prev, &src->netstat_prev, sizeof(netstat_prev));
 }
 
 // Thread states are sorted by priority, top priority becomes a "task state"
@@ -206,7 +206,9 @@ unsigned int mach_thread_priority(thread_t thread, policy_t policy)
 	time_value_t total_time = {0};
 	task_port_t task;
 
-	self.prev = [self psProcCopy];
+	if (!self.prev)
+		self.prev = [PSProc new];
+	[self.prev copySnapshotFrom:self];
 	// Task info
 	memcpy(&events_prev, &events, sizeof(events_prev));
 	memset(&basic, 0, sizeof(basic));

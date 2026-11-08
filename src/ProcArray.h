@@ -14,6 +14,8 @@
 @interface PSProcArray : NSObject
 @property (strong) NSMutableArray *procs;
 @property (strong) NSMutableArray *procsFiltered;
+// pid -> PSProc 索引，替代每次线性扫全表（O(n²) -> O(n)）
+@property (strong) NSMutableDictionary *procByPid;
 @property (strong) PSNetArray *nstats;
 @property (assign) CGFloat iconSize;
 @property (assign) uint64_t memUsed;

@@ -54,6 +54,10 @@ typedef struct PSCounts {
 @public struct PSCounts netstat_prev;
 @public struct PSCounts netstat_cache;
 @public uint64_t rusageSampleTime;
+// 进程启动时间在其生命周期内不变，缓存后 ΣTime 列无需每帧重复 proc_pidinfo
+@public time_t start_tvsec;
+@public BOOL start_tvsec_loaded;
+@public BOOL start_tvsec_valid;
 }
 @property (assign) display_t display;
 @property (assign) pid_t pid;
@@ -83,7 +87,8 @@ typedef struct PSCounts {
 //@property (strong) NSString *moredata;
 @property (strong) PSProc *prev;		// Previous data for comparison
 + (instancetype)psProcWithKinfo:(struct kinfo_proc *)ki iconSize:(CGFloat)size;
-- (instancetype)psProcCopy;
+// 把 src 的数值快照覆盖到 self（复用同一个 prev 对象，避免每秒新建上百个 PSProc）
+- (void)copySnapshotFrom:(PSProc *)src;
 - (void)update;
 - (void)updateWithKinfo:(struct kinfo_proc *)ki;
 @end

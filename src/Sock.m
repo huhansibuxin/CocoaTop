@@ -57,17 +57,23 @@ static UIColor *_grayColor() {
 }
 
 static UIColor *_greenColor() {
-    if (@available(iOS 13, *)) {
-        return [UIColor colorWithDynamicProvider:^(UITraitCollection *collection) {
-            if (collection.userInterfaceStyle == UIUserInterfaceStyleDark) {
-                return [UIColor colorWithRed:0.12 green:0.8 blue:0.12 alpha:1];
-            } else {
-                return [UIColor colorWithRed:0 green:0.5 blue:0 alpha:1];
-            }
-        }];
-    } else {
-        return [UIColor colorWithRed:.0 green:.5 blue:.0 alpha:1.0];
-    }
+    // 动态色对象只构造一次，绘制时仍会跟随系统深浅色模式
+    static UIColor *color;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        if (@available(iOS 13, *)) {
+            color = [UIColor colorWithDynamicProvider:^(UITraitCollection *collection) {
+                if (collection.userInterfaceStyle == UIUserInterfaceStyleDark) {
+                    return [UIColor colorWithRed:0.12 green:0.8 blue:0.12 alpha:1];
+                } else {
+                    return [UIColor colorWithRed:0 green:0.5 blue:0 alpha:1];
+                }
+            }];
+        } else {
+            color = [UIColor colorWithRed:.0 green:.5 blue:.0 alpha:1.0];
+        }
+    });
+    return color;
 }
 
 kern_return_t
@@ -701,7 +707,9 @@ void dump(unsigned char *b, int s)
     });
 	NSMutableDictionary *knownPorts = nil;
 	int *hpipe = alloca(sizeof(int) * 2);
-	pipe(hpipe);
+	hpipe[0] = hpipe[1] = -1;
+	if (pipe(hpipe) != 0)
+		return nil;
 	xpc_object_t xpc_out = 0, xpc_in = xpc_dictionary_create(0, 0, 0);
 	xpc_dictionary_set_uint64(xpc_in, "handle", 0);
 	xpc_dictionary_set_uint64(xpc_in, "routine", 828);
@@ -718,29 +726,31 @@ void dump(unsigned char *b, int s)
         } else {
             buf_size = 0x100000u;
         }
-        char *buf = (char *)malloc(buf_size);
-        
-        dispatch_async(launchd_pipe_queue, ^{
-            off_t done = 0;
-            size_t remains = buf_size;
-            int fd = hpipe[0];
-            while (done < buf_size) {
-                ssize_t once = read(fd, buf + done, remains);
-                if (once <= 0) {
-                    break;
+        // calloc 保证整块缓冲区 NUL 结尾：原来 malloc 未置零，输出没写满时
+        // strstr(buf, ...) 会一路读到未初始化内存之外。
+        char *buf = (char *)calloc(1, buf_size + 1);
+        if (buf) {
+            // 后台持续读 pipe：launchd 输出可能超过管道缓冲，没人读会把 xpc_pipe_routine 卡死
+            dispatch_async(launchd_pipe_queue, ^{
+                off_t done = 0;
+                size_t remains = buf_size;
+                int fd = hpipe[0];
+                while (done < (off_t)buf_size) {
+                    ssize_t once = read(fd, buf + done, remains);
+                    if (once <= 0) break;   // EOF：launchd 写完并关闭了它的 fd
+                    done += once;
+                    remains -= once;
                 }
-                done += once;
-                remains -= once;
-            }
-        });
-        
-        if (xpc_pipe_routine(xp, xpc_in, &xpc_out) || !xpc_dictionary_get_int64(xpc_out, "error")) {
+            });
+            // 原来只在 error==0 分支等待后台读；error!=0 时主线程不等待就 strstr/free，
+            // 后台 block 可能仍在写 buf（UAF）。改成无条件：先关掉本地写端与 xpc 消息
+            // 持有的 fd dup，让后台 read 能拿到 EOF，再等队列空闲，之后才解析与释放。
+            (void)xpc_pipe_routine(xp, xpc_in, &xpc_out);
             xpc_release(xpc_in);
             xpc_in = nil;
             close(hpipe[1]);
             hpipe[1] = -1;
             dispatch_sync(launchd_pipe_queue, ^{});
-        }
 		char *endpoints_start = strstr(buf, "\tendpoints = {");
 		if (endpoints_start) {
 			endpoints_start += 14;
@@ -748,7 +758,7 @@ void dump(unsigned char *b, int s)
 			if (endpoints_end)
 				*endpoints_end = 0;
 			PSPortInfo *ports = [PSPortInfo psPortInfoForPid:1];
-			NSScanner *endpoints = [NSScanner scannerWithString:[NSString stringWithUTF8String:endpoints_start]];
+			NSScanner *endpoints = [NSScanner scannerWithString:([NSString stringWithUTF8String:endpoints_start] ?: @"")];
 			free(buf);
             buf = NULL;
 			knownPorts = [NSMutableDictionary dictionaryWithCapacity:1000];
@@ -759,15 +769,16 @@ void dump(unsigned char *b, int s)
 				[endpoints scanCharactersFromSet:MU_cset intoString:nil];
 				[endpoints scanCharactersFromSet:AD_cset intoString:nil];
 				if (![endpoints scanUpToCharactersFromSet:[NSCharacterSet newlineCharacterSet] intoString:&name]) break;
-				for (mach_msg_type_number_t i = 0; i < ports->count; i++)
+				mach_msg_type_number_t portCount = ports ? ports->count : 0;
+				for (mach_msg_type_number_t i = 0; i < portCount; i++)
 					if (ports->table[i].iin_name == port) {
 						knownPorts[@(ports->table[i].iin_object)] = name;
 						break;
 					}
 			}
 		}
-        if (buf != NULL) {
-            free(buf);
+            if (buf != NULL)
+                free(buf);
         }
     }
 	if (xpc_in) xpc_release(xpc_in);
@@ -809,7 +820,10 @@ const char *port_types[] = {"","(thread)","(task)","(host)","(host priv)","(proc
 		natural_t object_type = 0;
 		vm_offset_t object_addr = 0;
 		mach_port_kernel_object(task, iin->iin_name, &object_type, (unsigned int *)&object_addr);
-		self.connect = name ? [name mutableCopy] : [NSMutableString stringWithUTF8String:port_types[object_type]];
+		// object_type 由 mach_port_kernel_object 回填，可能超出 port_types 表，越界会读到野指针
+		size_t portTypeCount = sizeof(port_types) / sizeof(port_types[0]);
+		const char *typeName = object_type < portTypeCount ? port_types[object_type] : "(unknown)";
+		self.connect = name ? [name mutableCopy] : [NSMutableString stringWithUTF8String:typeName];
 		if (pset) {
 			if (!self.connect.length)
 				[self.connect appendString:@"(portset)"];

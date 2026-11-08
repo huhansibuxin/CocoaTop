@@ -43,7 +43,7 @@
 	PSColumn *filterColumn;
 	BOOL sortDescending;
 	BOOL fullScreen;
-	BOOL refreshPaused;		// 暂停按钮状态：跨页面返回也保持，不自动恢复刷新
+	BOOL refreshPaused;		// 暂停按钮状态：仅当前页面有效，离开再返回自动恢复刷新
 	CGFloat timerInterval;
 	NSUInteger configId;
 	NSString *configChange;
@@ -115,8 +115,7 @@
 	[self popupMenuWithItems:@[@"Settings", @"Columns", @"Quick Guide", @"About"] selected:-1 aligned:UIControlContentHorizontalAlignmentLeft];
 	self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithImage:[UIImage imageNamed:@"UIButtonBarHamburger"] style:UIBarButtonItemStylePlain
 		target:self action:@selector(popupMenuToggle)];
-	self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemPause
-		target:self action:@selector(toggleRefreshPaused)];
+	self.navigationItem.rightBarButtonItem = [self refreshToggleItem];
 	statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, self.tableView.frame.size.width - (isPhone ? 80 : 150), 40)];
 	statusLabel.backgroundColor = [UIColor clearColor];
 	self.navigationItem.leftBarButtonItems = @[self.navigationItem.leftBarButtonItem, [[UIBarButtonItem alloc] initWithCustomView:statusLabel]];
@@ -210,11 +209,49 @@
 	[filter resignFirstResponder];
 }
 
-// 右上按钮：暂停/恢复每秒自动刷新。状态持久，进入进程详情再返回也不会自动变回刷新。
+// 系统 UIBarButtonSystemItemPause / Play 是实心一大坨，且跟随蓝色 tint 特别扎眼。
+// 这里自绘细描边（空心）图标 + 淡灰，AlwaysOriginal 保证不被导航栏染成蓝色。
+static UIImage *CTRefreshToggleImage(BOOL play)
+{
+	const CGFloat k = 22.0;
+	UIGraphicsBeginImageContextWithOptions(CGSizeMake(k, k), NO, 0);
+	UIColor *stroke;
+	if (@available(iOS 13, *))
+		stroke = UIColor.systemGray2Color;
+	else
+		stroke = [UIColor colorWithWhite:0.68 alpha:1.0];
+	[stroke setStroke];
+
+	UIBezierPath *path = [UIBezierPath bezierPath];
+	if (play) {
+		[path moveToPoint:CGPointMake(7.5, 4.5)];
+		[path addLineToPoint:CGPointMake(17.5, 11)];
+		[path addLineToPoint:CGPointMake(7.5, 17.5)];
+		[path closePath];
+	} else {
+		[path appendPath:[UIBezierPath bezierPathWithRoundedRect:CGRectMake(6.5, 4.5, 3.5, 13) cornerRadius:1.2]];
+		[path appendPath:[UIBezierPath bezierPathWithRoundedRect:CGRectMake(12.5, 4.5, 3.5, 13) cornerRadius:1.2]];
+	}
+	path.lineWidth = 1.4;
+	path.lineJoinStyle = kCGLineJoinRound;
+	[path stroke];
+
+	UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
+	UIGraphicsEndImageContext();
+	return [image imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];
+}
+
+// 右上按钮：暂停/恢复每秒自动刷新。暂停只在当前页面有效，离开再返回自动恢复。
 - (UIBarButtonItem *)refreshToggleItem
 {
-	return [[UIBarButtonItem alloc] initWithBarButtonSystemItem:(refreshPaused ? UIBarButtonSystemItemPlay : UIBarButtonSystemItemPause)
-		target:self action:@selector(toggleRefreshPaused)];
+	static UIImage *pauseIcon = nil;
+	static UIImage *playIcon = nil;
+	if (!pauseIcon) {
+		pauseIcon = CTRefreshToggleImage(NO);
+		playIcon = CTRefreshToggleImage(YES);
+	}
+	return [[UIBarButtonItem alloc] initWithImage:(refreshPaused ? playIcon : pauseIcon)
+		style:UIBarButtonItemStylePlain target:self action:@selector(toggleRefreshPaused)];
 }
 
 - (void)toggleRefreshPaused
@@ -466,7 +503,12 @@
 - (void)viewWillAppear:(BOOL)animated
 {
 	[super viewWillAppear:animated];
-	// 从进程详情页返回时保持暂停状态与按钮图标，绝不自动恢复刷新
+	// 暂停只在当前页面停留期间有效：点进进程详情 / Summary / Modules / Threads 再返回，
+	// 自动恢复每秒刷新，不持久化暂停状态。下面的 reappearAllView 会刷一帧并接上定时器链。
+	if (refreshPaused) {
+		refreshPaused = NO;
+		timer = nil;
+	}
 	self.navigationItem.rightBarButtonItem = [self refreshToggleItem];
     if (@available(iOS 7, *)) {
         self.navigationController.navigationBar.barTintColor = nil;

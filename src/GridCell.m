@@ -76,8 +76,8 @@ static const CGFloat kColumnMonoFontSize = 13.0;
 static const CGFloat kHeaderFontSize     = 16.0;
 static const CGFloat kFooterFontSize     = 12.0;
 // 子页面（Summary / Threads / Open files / Open ports）行高只有主界面的 60%，
-// 第一列比主界面小两号；主界面 44pt 行高仍保持 18pt 不变
-static const CGFloat kTaskNameFontSize   = 16.0;
+// 第一列比主界面小四号；主界面 44pt 行高仍保持 18pt 不变
+static const CGFloat kTaskNameFontSize   = 14.0;
 
 // 列间竖线：短小、极细（1 物理像素）、隔行显示
 static const CGFloat kDividerWidthPx     = 1.0;   // 1 物理像素

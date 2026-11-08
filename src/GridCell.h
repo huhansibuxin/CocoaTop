@@ -12,6 +12,8 @@ extern UIColor *CTCellBackgroundColor(BOOL terminated, BOOL started, BOOL zebra)
 @property (assign) NSUInteger firstColWidth;
 @property (assign) BOOL extendArgsLabel;
 @property (assign) BOOL colorDiffs;
+// 记录当前 cell 是否正在显示图标：图标状态变化时才需要重新 layout 文字缩进
+@property (assign) BOOL iconShown;
 @property (strong) NSMutableArray *labels;
 @property (strong) NSMutableArray *dividers;
 + (NSString *)reuseIdWithIcon:(bool)withicon;

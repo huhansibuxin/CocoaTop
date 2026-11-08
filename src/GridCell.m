@@ -118,7 +118,12 @@ UIColor *CTCellBackgroundColor(BOOL terminated, BOOL started, BOOL zebra)
 
 + (NSString *)reuseIdWithIcon:(bool)withicon
 {
-	return withicon ? @"GridTableIconCell" : @"GridTableCell";
+	// 主界面按 %CPU 降序排序，进程每秒都会换到别的行；刷新优化又跳过了 reloadData，
+	// cell 对象会一直固定在行号上。若按「当前有没有图标」分成两个复用池，
+	// 带图标池的 cell 被复用到无图标进程时会残留旧图标（系统 daemon 显示 CocoaTop/别的插件图标）。
+	// 因此统一使用单一复用池，图标完全由 updateWithProc: 按当前进程设置或清空。
+	(void)withicon;
+	return @"GridTableCell";
 }
 
 - (instancetype)initWithIcon:(bool)withicon
@@ -234,8 +239,20 @@ UIColor *CTCellBackgroundColor(BOOL terminated, BOOL started, BOOL zebra)
 	self.textLabel.textColor = proc.uid == 0 ? rootNameColor :
 		psIsUserApp(proc) ? userNameColor : plainNameColor;
 	self.detailTextLabel.text = [proc.executable stringByAppendingString:proc.args];
-	if (proc.icon)
+	// 必须无条件赋值：proc.icon 为 nil 时要把复用 cell 上的旧图标清掉，
+	// 否则排序变动后该行会一直残留上一次（或上一个 app）的图标。
+	BOOL needsIcon = proc.icon != nil;
+	if (self.imageView.image != proc.icon)
 		self.imageView.image = proc.icon;
+	if (needsIcon != self.iconShown) {
+		self.iconShown = needsIcon;
+		// textLabel / detailTextLabel 的起始 x 由 imageView 宽度决定，图标增删后要立即重排
+		[self setNeedsLayout];
+		// 已在屏幕上的 cell（跳过 reloadData 的轻量刷新路径）需要立刻重排；
+		// cellForRowAtIndexPath 新建的 cell 还没父视图，交给 UIKit 后续统一布局即可
+		if (self.superview)
+			[self layoutIfNeeded];
+	}
 	for (PSColumn *col in columns)
 		if (col != columns[0]) {
 			//if (col.tag == 4) {
@@ -253,6 +270,9 @@ UIColor *CTCellBackgroundColor(BOOL terminated, BOOL started, BOOL zebra)
 
 - (void)updateWithSock:(PSSock *)sock columns:(NSArray *)columns
 {
+	// 子页面不显示图标；统一复用池后显式清空，避免任何残留影响第一列文字缩进
+	self.imageView.image = nil;
+	self.iconShown = NO;
 	self.detailTextLabel.textColor = [UIColor grayColor];
 	for (PSColumn *col in columns) {
 		UILabel *label;
@@ -278,7 +298,7 @@ UIColor *CTCellBackgroundColor(BOOL terminated, BOOL started, BOOL zebra)
 {
 	[super layoutSubviews];
 	CGRect frame;
-	NSInteger imageWidth = self.imageView.frame.size.width;
+	NSInteger imageWidth = self.imageView.image ? self.imageView.frame.size.width : 0;
 	frame = self.contentView.frame;
 		frame.origin.x = 5;
 		frame.size.width -= 10;

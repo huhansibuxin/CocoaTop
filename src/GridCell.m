@@ -233,7 +233,13 @@ UIColor *CTCellBackgroundColor(BOOL terminated, BOOL started, BOOL zebra)
 	dispatch_once(&nameColorToken, ^{
 		rootColor = [UIColor colorWithRed:0.55 green:0.55 blue:1.0 alpha:1.0];
 		userColor = [UIColor colorWithRed:0.12 green:0.5 blue:0.12 alpha:1.0];
-		plainColor = [UIColor blackColor];
+		// 普通进程名必须跟随系统深浅色：写死 blackColor 时深色模式是黑底黑字，完全看不见。
+		// labelColor 是动态色，UILabel 会随 traitCollection 自动解析成白/黑；
+		// 缓存动态色对象本身是安全的（不要缓存 resolvedColor）。
+		if (@available(iOS 13, *))
+			plainColor = [UIColor labelColor];
+		else
+			plainColor = [UIColor blackColor];
 	});
 	self.textLabel.text = proc.name;
 	self.textLabel.textColor = proc.uid == 0 ? rootColor :

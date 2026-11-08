@@ -155,23 +155,9 @@ NSURL *open2URL;
         }
     }
 	[socks sortUsingComparator:sortColumn.sort desc:sortDescending];
-	if (_timer == nil || [self.tableView numberOfRowsInSection:0] != socks.count) {
-		// 首刷 / 行数变化：让 tableView 重建
-		[self.tableView reloadData];
-	} else {
-		// 行数不变：只刷新可见 cell，避免每秒一次全表 reloadData 打断主线程
-		for (UITableViewCell *cell in self.tableView.visibleCells) {
-			NSIndexPath *ip = [self.tableView indexPathForCell:cell];
-			if (!ip || (NSUInteger)ip.row >= socks.count || ![cell isKindOfClass:[GridTableCell class]])
-				continue;
-			PSSock *s = socks[ip.row];
-			[(GridTableCell *)cell updateWithSock:s columns:columns];
-			cell.backgroundColor = CTCellBackgroundColor(
-				s.display == ProcDisplayTerminated,
-				s.display == ProcDisplayStarted,
-				(ip.row & 1) != 0);
-		}
-	}
+	// 原始行为：每秒全表 reloadData（v2.3.6 的「行数不变只刷 visibleCells」已回退，
+	// 该优化会让详情页表头/footer 对象与屏幕显示脱节，同样导致点列头无响应）
+	[self.tableView reloadData];
 	// First time refresh?
 	if (_timer == nil) {
 		// We don't need info about new sockets, they are all new :)

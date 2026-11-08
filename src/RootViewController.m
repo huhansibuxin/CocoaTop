@@ -310,28 +310,13 @@ static UIImage *CTRefreshToggleImage(BOOL play)
 	// 暂停中 / 手指拖动 / 惯性滚动 / 正在 kill 进程：跳过本次采集与全表 reloadData
 	if (refreshPaused || self.tableView.isTracking || self.tableView.isDecelerating || self.tableView.editing)
 		return;
-	NSUInteger rowsBefore = [self.tableView numberOfRowsInSection:0];
 	[procs refresh];
 	[procs sortUsingComparator:sortColumn.sort desc:sortDescending];
 	[procs filter:filter.text column:filterColumn];
-	if (rowsBefore != procs.count) {
-		// 进程增删导致行数变化，必须让 tableView 重建
-		[self.tableView reloadData];
-	} else {
-		// 行数不变：只刷新可见 cell 的文本与底色，避免每秒一次全表 reloadData
-		// （reloadData 会重算全部行高、重问 dataSource、重绘 header/footer）
-		for (UITableViewCell *cell in self.tableView.visibleCells) {
-			NSIndexPath *ip = [self.tableView indexPathForCell:cell];
-			if (!ip || (NSUInteger)ip.row >= procs.count || ![cell isKindOfClass:[GridTableCell class]])
-				continue;
-			PSProc *p = procs[ip.row];
-			[(GridTableCell *)cell updateWithProc:p columns:columns];
-			cell.backgroundColor = CTCellBackgroundColor(
-				p.display == ProcDisplayTerminated,
-				p.display == ProcDisplayStarted,
-				(ip.row & 1) != 0);
-		}
-	}
+	// 原始行为：每秒全表 reloadData。表头/footer 每次由 viewForHeaderInSection 重新取
+	// 最新的 header/footer 对象；跳过 reloadData 会让屏幕上显示的旧表头与 ivar 脱节，
+	// 导致点列头排序完全无响应（v2.3.6 的「行数不变只刷 visibleCells」已回退）。
+	[self.tableView reloadData];
 	[footer updateSummaryWithColumns:columns procs:procs];
 	// Status bar
 // Also add: Uptime, CPU Freq, Cores, Cache L1/L2
@@ -360,17 +345,20 @@ static UIImage *CTRefreshToggleImage(BOOL play)
         shortLabel = UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPhone;
     }
     
-    // 宽度没变就不重设 frame（每秒刷新时避免无谓的 layout 触发）
-    CGFloat labelWidth = self.tableView.frame.size.width - (shortLabel ? 80 : 150);
-    if (statusLabel.frame.size.width != labelWidth)
-        statusLabel.frame = CGRectMake(statusLabel.frame.origin.x, statusLabel.frame.origin.y, labelWidth, 40);
-    statusLabel.text = shortLabel
-        ? [NSString stringWithFormat:@"Free: %.1f MB  CPU: %.1f%%",
-            (float)procs.memFree / 1024 / 1024, (float)procs.totalCpu / 10]
-        : [NSString stringWithFormat:@"Processes: %lu   Threads: %lu   Free: %.1f/%.1f MB   CPU: %.1f%%",
-            (unsigned long)procs.totalCount, (unsigned long)procs.threadCount,
-            (float)procs.memFree / 1024 / 1024, (float)procs.memTotal / 1024 / 1024,
-            (float)procs.totalCpu / 10];
+    if (shortLabel) {
+        statusLabel.frame = CGRectMake(statusLabel.frame.origin.x, statusLabel.frame.origin.y, self.tableView.frame.size.width - 80, 40);
+        statusLabel.text = [NSString stringWithFormat:@"Free: %.1f MB  CPU: %.1f%%",
+        (float)procs.memFree / 1024 / 1024,
+        (float)procs.totalCpu / 10];
+    } else {
+        statusLabel.frame = CGRectMake(statusLabel.frame.origin.x, statusLabel.frame.origin.y, self.tableView.frame.size.width - 150, 40);
+        statusLabel.text = [NSString stringWithFormat:@"Processes: %lu   Threads: %lu   Free: %.1f/%.1f MB   CPU: %.1f%%",
+        (unsigned long)procs.totalCount,
+        (unsigned long)procs.threadCount,
+        (float)procs.memFree / 1024 / 1024,
+        (float)procs.memTotal / 1024 / 1024,
+        (float)procs.totalCpu / 10];
+    }
 	// Query network statistics, cause no one did it before.
 	if (![_timer isKindOfClass:[NSTimer class]])
 		[procs.nstats query];

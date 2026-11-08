@@ -158,7 +158,8 @@
     }
 //#endif
 	[[CocoaTopPreferences sharedPreferences] registerDefaults:@{
-		@"Columns" : @[@0, @1, @3, @5, @20, @6, @7, @9, @12, @13],
+		// 与 CocoaTopPreferences.m 的 CocoaTopDefaultPreferences 保持一致
+		@"Columns" : @[@0, @3, @7, @29, @5, @20, @6, @24, @9, @12, @1, @13],
 		@"UpdateInterval" : @"1",
 		@"FullWidthCommandLine" : @NO,
 		@"ColorDiffs" : @YES,
@@ -167,7 +168,7 @@
 		@"ShowHeader" : @YES,
 		@"ShowFooter" : @YES,
 		@"ShortenPaths" : @YES,
-		@"SortColumn" : @1,         @"SortDescending" : @NO,		// Main page (sort by pid)
+		@"SortColumn" : @3,         @"SortDescending" : @YES,		// Main page (按 %CPU 使用率降序, 表头显示 %▼)
 		@"FilterColumn" : @0,
 		@"ProcInfoMode" : @0,
 		@"Mode0SortColumn" : @1001, @"Mode0SortDescending" : @NO,	// Summary (by initial column order)
@@ -501,6 +502,8 @@
 	if (cell == nil)
 		cell = [GridTableCell cellWithIcon:proc.icon != nil];
 	[cell configureWithId:configId columns:columns size:CGSizeMake(0, tableView.rowHeight)];
+	// 白色版样式：白底行(偶数行)显示短小竖线，浅灰斑马纹行(奇数行)不显示
+	[cell setVerticalDividersVisible:!(indexPath.row & 1)];
 	if (proc)
 		[cell updateWithProc:proc columns:columns];
 	return cell;

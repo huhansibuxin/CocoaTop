@@ -6,7 +6,10 @@
 static NSDictionary *CocoaTopDefaultPreferences(void)
 {
 	return @{
-		@"Columns" : @[@0, @1, @3, @5, @20, @6, @7, @9, @12, @13],
+		// 默认列顺序：命令行 / %CPU / 常驻内存 / 进程运行时间(ΣTime) / Mach 任务状态 /
+		// Mach 任务角色 / 原始进程标志 / 物理内存占用 / 用户 ID / 线程数 / 进程 ID / Mach 端口
+		// 与 RootViewController.m 的 registerDefaults 必须保持一致，否则重装后配置会变
+		@"Columns" : @[@0, @3, @7, @29, @5, @20, @6, @24, @9, @12, @1, @13],
 		@"UpdateInterval" : @"1",
 		@"FullWidthCommandLine" : @NO,
 		@"ColorDiffs" : @YES,
@@ -15,7 +18,8 @@ static NSDictionary *CocoaTopDefaultPreferences(void)
 		@"ShowHeader" : @YES,
 		@"ShowFooter" : @YES,
 		@"ShortenPaths" : @YES,
-		@"SortColumn" : @1, @"SortDescending" : @NO,
+		// 与 RootViewController.m 的 registerDefaults 保持一致：默认按 %CPU 使用率降序
+		@"SortColumn" : @3, @"SortDescending" : @YES,
 		@"FilterColumn" : @0,
 		@"ProcInfoMode" : @0,
 		@"Mode0SortColumn" : @1001, @"Mode0SortDescending" : @NO,

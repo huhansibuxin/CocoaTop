@@ -68,6 +68,19 @@ static bool psIsUserApp(PSProc *proc)
 	return [proc.executable rangeOfString:@"/Application/"].location != NSNotFound;
 }
 
+// 白色版（真皮）UI 实测基准：498px 宽原图对应 430pt，即 1pt = 1.158px
+// 行高 44pt、图标 = 行高 44pt、进程名 18pt、列值 13pt、表头 bold 16pt
+static const CGFloat kProcNameFontSize   = 18.0;
+static const CGFloat kColumnFontSize     = 13.0;
+static const CGFloat kColumnMonoFontSize = 13.0;
+static const CGFloat kHeaderFontSize     = 16.0;
+static const CGFloat kFooterFontSize     = 12.0;
+
+// 列间竖线：短小、极细（1 物理像素）、隔行显示
+static const CGFloat kDividerWidthPx     = 1.0;   // 1 物理像素
+static const CGFloat kDividerHeightRatio = 0.34;  // 仅占行高 34%
+static const NSInteger kVerticalDividerTag = 8701;
+
 
 @implementation GridTableCell
 
@@ -104,7 +117,7 @@ static bool psIsUserApp(PSProc *proc)
 	self.dividers = [NSMutableArray arrayWithCapacity:columns.count];
 	self.extendArgsLabel = [[[CocoaTopPreferences sharedPreferences] objectForKey:@"FullWidthCommandLine"] boolValue];
 	self.colorDiffs = [[[CocoaTopPreferences sharedPreferences] objectForKey:@"ColorDiffs"] boolValue];
-	self.textLabel.font = size.height > 40 ? [UIFont systemFontOfSize:18.0] : [UIFont systemFontOfSize:12.0];
+	self.textLabel.font = [UIFont systemFontOfSize:kProcNameFontSize];
 	if (size.height > 40 && self.extendArgsLabel)
 		size.height /= 2;
 	NSUInteger totalCol;
@@ -117,11 +130,15 @@ static bool psIsUserApp(PSProc *proc)
 				self.detailTextLabel.lineBreakMode = NSLineBreakByTruncatingMiddle;
 			}
 		} else {
-			UIView *divider = [[UIView alloc] initWithFrame:CGRectMake(totalCol, 0, 1, size.height)];
+			// 白色版样式：短小、极细的列间竖线，居中显示；由 RootViewController 按行号隔行显隐
+			CGFloat lineW = kDividerWidthPx / [UIScreen mainScreen].scale;
+			CGFloat lineH = floor(size.height * kDividerHeightRatio);
+			UIView *divider = [[UIView alloc] initWithFrame:CGRectMake(totalCol, (size.height - lineH) / 2, lineW, lineH)];
+			divider.tag = kVerticalDividerTag;
             if (@available(iOS 13, *)) {
-                divider.backgroundColor = UIColor.secondarySystemBackgroundColor;
+                divider.backgroundColor = UIColor.separatorColor;
             } else {
-                divider.backgroundColor = [UIColor colorWithWhite:0.9 alpha:1];
+                divider.backgroundColor = [UIColor colorWithWhite:0.85 alpha:1];
             }
 			[self.dividers addObject:divider];
 			[self.contentView addSubview:divider];
@@ -134,7 +151,7 @@ static bool psIsUserApp(PSProc *proc)
 			//}
 			UILabel *label = [[UILabel alloc] initWithFrame:CGRectMake(totalCol + 4, 0, col.width - 8, size.height)];
 			label.textAlignment = col.align;
-			label.font = col.style & ColumnStyleMonoFont ? [UIFont fontWithName:@"Courier" size:13.0] : [UIFont systemFontOfSize:12.0];
+			label.font = col.style & ColumnStyleMonoFont ? [UIFont fontWithName:@"Courier" size:kColumnMonoFontSize] : [UIFont systemFontOfSize:kColumnFontSize];
 			label.adjustsFontSizeToFitWidth = !(col.style & ColumnStyleEllipsis);
 			if (col.style & ColumnStylePath) label.lineBreakMode = NSLineBreakByTruncatingMiddle;
 			label.backgroundColor = [UIColor clearColor];
@@ -155,6 +172,14 @@ static bool psIsUserApp(PSProc *proc)
 		[self.contentView addSubview:divider];
 	}
 	self.id = id;
+}
+
+// 隔行显示：只切换列间竖线，不影响 FullWidthCommandLine 的横向分隔线
+- (void)setVerticalDividersVisible:(BOOL)visible
+{
+	for (UIView *item in self.dividers)
+		if (item.tag == kVerticalDividerTag)
+			item.hidden = !visible;
 }
 
 - (void)updateWithProc:(PSProc *)proc columns:(NSArray *)columns
@@ -249,7 +274,7 @@ static bool psIsUserApp(PSProc *proc)
 		UILabel *label = [[UILabel alloc] initWithFrame:CGRectMake(totalCol + 2, 0, col.width - 4, size.height)];
 		[self.labels addObject:label];
 		label.textAlignment = footer && col.getSummary ? col.align : NSTextAlignmentCenter;
-		label.font = footer && col != columns[0] ? [UIFont systemFontOfSize:12.0] : [UIFont boldSystemFontOfSize:16.0];
+		label.font = footer && col != columns[0] ? [UIFont systemFontOfSize:kFooterFontSize] : [UIFont boldSystemFontOfSize:kHeaderFontSize];
 		label.adjustsFontSizeToFitWidth = YES;
 		label.text = footer ? @"-" : col.name;
         if (@available(iOS 13, *)) {

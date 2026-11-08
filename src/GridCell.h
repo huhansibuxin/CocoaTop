@@ -14,6 +14,8 @@
 + (NSString *)reuseIdWithIcon:(bool)withicon;
 + (instancetype)cellWithIcon:(bool)withicon;
 - (void)configureWithId:(int)id columns:(NSArray *)columns size:(CGSize)size;
+// 隔行显示/隐藏列间竖线（白色版样式：隔一行才有一条短小细线）
+- (void)setVerticalDividersVisible:(BOOL)visible;
 - (void)updateWithProc:(PSProc *)proc columns:(NSArray *)columns;
 - (void)updateWithSock:(PSSock *)sock columns:(NSArray *)columns;
 @end

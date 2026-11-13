@@ -96,9 +96,13 @@ UIColor *CTCellBackgroundColor(BOOL terminated, BOOL started, BOOL zebra)
 					? [UIColor colorWithRed:0.5 green:0.12 blue:0.12 alpha:1]
 					: [UIColor colorWithRed:1 green:0.7 blue:0.7 alpha:1];
 			}];
+			// 新进程首帧(display=Started)整行刷成这个绿色高亮。原来的深绿 (0.12,0.5,0.12)
+			// 与 userApp 进程名绿 userColor 完全同色、与 root 蓝紫字对比度仅约 1.4:1，
+			// 深色模式下复活进程第一秒名字会糊在底色里看不见（浅色档是亮绿，不复现）。
+			// 调暗后蓝紫/绿/白三档字都有对比，浅色档保持不变。
 			startColor = [UIColor colorWithDynamicProvider:^UIColor *(UITraitCollection *c) {
 				return c.userInterfaceStyle == UIUserInterfaceStyleDark
-					? [UIColor colorWithRed:0.12 green:0.5 blue:0.12 alpha:1]
+					? [UIColor colorWithRed:0.06 green:0.22 blue:0.06 alpha:1]
 					: [UIColor colorWithRed:0.7 green:1 blue:0.7 alpha:1];
 			}];
 			zebraColor = UIColor.secondarySystemBackgroundColor;

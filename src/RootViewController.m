@@ -661,7 +661,7 @@ static UIImage *CTRefreshToggleImage(BOOL play)
 		[pinned addObject:key];
 	[prefs setObject:pinned forKey:@"PinnedProcesses"];
 	// 立即重排并刷新（复用 KILL 的刷新方式，暂停/编辑状态下也保证界面更新）
-	tableView.editing = NO;
+	self.tableView.editing = NO;
 	[timer performSelector:@selector(fire) withObject:nil afterDelay:.1f];
 }
 

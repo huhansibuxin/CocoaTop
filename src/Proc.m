@@ -373,3 +373,11 @@ unsigned int mach_thread_priority(thread_t thread, policy_t policy)
 }
 
 @end
+
+NSString *PSProcPinKey(PSProc *proc)
+{
+	if (!proc || !proc.name || !proc.executable)
+		return nil;
+	// 稳定标识：进程复活后 pid 会变，但 uid/名字/可执行路径保持一致
+	return [NSString stringWithFormat:@"%u|%@|%@", (unsigned)proc.uid, proc.name, proc.executable];
+}

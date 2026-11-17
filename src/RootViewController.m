@@ -636,8 +636,33 @@ static UIImage *CTRefreshToggleImage(BOOL play)
 
 - (NSString *)tableView:(UITableView *)tableView titleForSwipeAccessoryButtonForRowAtIndexPath:(NSIndexPath *)indexPath
 {
-	// 开启/禁止注入开关写入 RootHideConfig 后根本不生效，已整体移除；左滑只保留 KILL
-	return nil;
+	if (indexPath.row >= procs.count)
+		return nil;
+	NSString *key = PSProcPinKey(procs[indexPath.row]);
+	NSArray *pinned = [[CocoaTopPreferences sharedPreferences] objectForKey:@"PinnedProcesses"];
+	return (key && [pinned isKindOfClass:[NSArray class]] && [pinned containsObject:key]) ? @"取消置顶" : @"置顶";
+}
+
+// 切换某进程的置顶状态
+- (void)togglePinForRowAtIndexPath:(NSIndexPath *)indexPath
+{
+	if (indexPath.row >= procs.count)
+		return;
+	NSString *key = PSProcPinKey(procs[indexPath.row]);
+	if (!key)
+		return;
+	CocoaTopPreferences *prefs = [CocoaTopPreferences sharedPreferences];
+	NSMutableArray *pinned = [[prefs objectForKey:@"PinnedProcesses"] mutableCopy];
+	if (![pinned isKindOfClass:[NSMutableArray class]])
+		pinned = [NSMutableArray array];
+	if ([pinned containsObject:key])
+		[pinned removeObject:key];
+	else
+		[pinned addObject:key];
+	[prefs setObject:pinned forKey:@"PinnedProcesses"];
+	// 立即重排并刷新（复用 KILL 的刷新方式，暂停/编辑状态下也保证界面更新）
+	tableView.editing = NO;
+	[timer performSelector:@selector(fire) withObject:nil afterDelay:.1f];
 }
 
 - (void)tableView:(UITableView *)tableView commitEditingStyle:(UITableViewCellEditingStyle)editingStyle forRowAtIndexPath:(NSIndexPath *)indexPath
@@ -648,7 +673,13 @@ static UIImage *CTRefreshToggleImage(BOOL play)
 
 - (void)tableView:(UITableView *)tableView swipeAccessoryButtonPushedForRowAtIndexPath:(NSIndexPath *)indexPath
 {
-	// 注入开关已移除，保留空实现兼容系统调用
+	[self togglePinForRowAtIndexPath:indexPath];
+}
+
+// iOS 11+ 标准回调名，两个名字都实现以确保点击一定生效
+- (void)tableView:(UITableView *)tableView swipeAccessoryButtonTappedForRowAtIndexPath:(NSIndexPath *)indexPath
+{
+	[self togglePinForRowAtIndexPath:indexPath];
 }
 
 #pragma mark -

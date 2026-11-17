@@ -4,6 +4,7 @@
 #import <pwd.h>
 #import "ProcArray.h"
 #import "NetArray.h"
+#import "CocoaTopPreferences.h"
 
 @implementation PSProcInfo
 int sort_procs_by_pid(const void *p1, const void *p2)
@@ -188,6 +189,32 @@ int sort_procs_by_pid(const void *p1, const void *p2)
 		[self.procs sortUsingComparator:^NSComparisonResult(id a, id b) { return comp(b, a); }];
 	} else
 		[self.procs sortUsingComparator:comp];
+	[self applyPinnedProcesses];
+}
+
+// 置顶：按当前排序做稳定分区，把命中的进程提到数组前面，其余保持相对顺序。
+// 稳定标识用 uid|name|executable（进程复活换了 pid 仍能命中）；进程不在列表里自然不显示。
+// 原地改 self.procs，保持数组对象身份，避免 procsFiltered / 表头与数据脱节。
+- (void)applyPinnedProcesses
+{
+	NSArray *pinnedKeys = [[CocoaTopPreferences sharedPreferences] objectForKey:@"PinnedProcesses"];
+	if (![pinnedKeys isKindOfClass:[NSArray class]] || pinnedKeys.count == 0 || self.procs.count == 0)
+		return;
+	NSSet *pinned = [NSSet setWithArray:pinnedKeys];
+	NSMutableArray *top = [NSMutableArray arrayWithCapacity:pinned.count];
+	NSMutableArray *rest = [NSMutableArray arrayWithCapacity:self.procs.count];
+	for (PSProc *proc in self.procs) {
+		NSString *key = PSProcPinKey(proc);
+		if (key && [pinned containsObject:key])
+			[top addObject:proc];
+		else
+			[rest addObject:proc];
+	}
+	if (top.count == 0)
+		return;
+	[top addObjectsFromArray:rest];
+	[self.procs removeAllObjects];
+	[self.procs addObjectsFromArray:top];
 }
 
 - (void)setAllDisplayed:(display_t)display

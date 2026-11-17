@@ -96,3 +96,6 @@ typedef struct PSCounts {
 
 proc_state_t mach_state_order(struct thread_basic_info *tbi);
 unsigned int mach_thread_priority(thread_t thread, policy_t policy);
+
+// 进程置顶用的稳定标识：uid + name + executable（pid 复活后会变，故不用 pid）
+NSString *PSProcPinKey(PSProc *proc);
